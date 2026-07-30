@@ -1,0 +1,29 @@
+[package]
+name = "flagforge-core"
+description = "Pure, I/O-free feature-flag domain model and evaluation engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Derive `utoipa::ToSchema` on the public domain types so the API crate can
+# expose them in the OpenAPI document without redeclaring them.
+openapi = ["dep:utoipa"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+semver = { workspace = true }
+regex = { workspace = true }
+thiserror = { workspace = true }
+utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
