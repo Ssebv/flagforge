@@ -1,0 +1,42 @@
+name: flagforge
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: flagforge
+      POSTGRES_PASSWORD: flagforge
+      POSTGRES_DB: flagforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flagforge -d flagforge"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://flagforge:flagforge@postgres:5432/flagforge
+      # Development value. In any real deployment this comes from a secret
+      # store, and the server refuses to start if it is shorter than 32 chars.
+      JWT_SECRET: local-development-secret-not-for-production
+      APP_ENV: development
+      RUST_LOG: flagforge_api=debug,flagforge_storage=info,tower_http=info,warn
+      AUTO_MIGRATE: "true"
+    ports:
+      - "8080:8080"
+    # The runtime image is distroless — no shell, no curl — so liveness is
+    # probed over HTTP by whatever orchestrates it, not from inside.
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

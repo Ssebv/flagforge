@@ -1,0 +1,48 @@
+# Fly.io deployment.
+#
+#   fly launch --no-deploy
+#   fly postgres create --name flagforge-db
+#   fly postgres attach flagforge-db          # sets DATABASE_URL
+#   fly secrets set JWT_SECRET="$(openssl rand -base64 48)"
+#   fly deploy
+
+app = "flagforge"
+primary_region = "mad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENV = "production"
+  PORT = "8080"
+  RUST_LOG = "flagforge_api=info,flagforge_storage=info,warn"
+  # Fly's Postgres connection limit is shared across machines, so keep each
+  # machine's pool modest rather than letting two machines exhaust it.
+  DATABASE_MAX_CONNECTIONS = "10"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # At least one machine stays up: a cold start would add seconds to an
+  # evaluation call that is supposed to take milliseconds.
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+# Readiness, not liveness: this one may legitimately fail while the database
+# is down, and Fly should stop routing rather than restart the machine.
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  timeout = "3s"
+  path = "/health/ready"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

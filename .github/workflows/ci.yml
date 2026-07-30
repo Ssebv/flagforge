@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build on a warning rather than letting them accumulate until
+  # nobody reads the output any more.
+  RUSTFLAGS: "-D warnings"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    # Queries are checked against the committed .sqlx cache, so no database is
+    # needed to lint.
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: flagforge
+          POSTGRES_PASSWORD: flagforge
+          POSTGRES_DB: flagforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flagforge"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://flagforge:flagforge@localhost:5432/flagforge
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version ^0.9 --no-default-features --features rustls,postgres --locked
+
+      - name: Apply migrations
+        run: sqlx migrate run --source migrations
+
+      - name: Verify the committed query cache matches the schema
+        # Catches the classic failure: someone edits a query and forgets to
+        # re-run `cargo sqlx prepare`, so CI passes here but the Docker build
+        # (which has no database) breaks.
+        run: cargo sqlx prepare --workspace --check -- --all-targets
+
+      - name: Test
+        run: cargo test --workspace --all-features
+
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: flagforge:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image against a real database
+        run: |
+          docker network create flagforge-ci
+          docker run -d --name pg --network flagforge-ci \
+            -e POSTGRES_USER=flagforge -e POSTGRES_PASSWORD=flagforge -e POSTGRES_DB=flagforge \
+            postgres:18-alpine
+          until docker exec pg pg_isready -U flagforge; do sleep 1; done
+
+          docker run -d --name api --network flagforge-ci -p 8080:8080 \
+            -e DATABASE_URL=postgres://flagforge:flagforge@pg:5432/flagforge \
+            -e JWT_SECRET=ci-secret-that-is-at-least-32-characters \
+            flagforge:ci
+
+          # The image runs its own migrations on boot; if that fails, so does
+          # this.
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health/ready; then
+              echo "ready"; exit 0
+            fi
+            sleep 2
+          done
+
+          echo "the container never became ready"
+          docker logs api
+          exit 1
