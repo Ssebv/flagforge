@@ -1,0 +1,113 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT flag_id, environment_id, enabled, off_variant, fallthrough, rules, version, updated_at\n        FROM flag_configs\n        WHERE flag_id = $1 AND environment_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "flag_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "flag_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "environment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "environment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "off_variant",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "off_variant"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "fallthrough",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "fallthrough"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rules",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "rules"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "777ff5e4ce470bc45b8afff31358ad7ecfb8e9c68dea1267bf68f95dc41b837c"
+}

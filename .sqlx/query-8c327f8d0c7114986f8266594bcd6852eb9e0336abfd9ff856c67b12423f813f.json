@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO flag_configs (flag_id, environment_id, enabled, off_variant, fallthrough, rules)\n        SELECT $1, e.id, FALSE, $2, $3, '[]'::JSONB\n        FROM environments e\n        WHERE e.project_id = $4\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c327f8d0c7114986f8266594bcd6852eb9e0336abfd9ff856c67b12423f813f"
+}

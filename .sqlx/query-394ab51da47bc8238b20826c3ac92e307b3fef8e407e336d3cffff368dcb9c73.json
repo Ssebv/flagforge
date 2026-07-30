@@ -1,0 +1,118 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO flag_configs (flag_id, environment_id, enabled, off_variant, fallthrough, rules)\n        VALUES ($1, $2, $3, $4, $5, $6)\n        ON CONFLICT (flag_id, environment_id) DO UPDATE\n        SET enabled     = EXCLUDED.enabled,\n            off_variant = EXCLUDED.off_variant,\n            fallthrough = EXCLUDED.fallthrough,\n            rules       = EXCLUDED.rules\n        WHERE $7::BIGINT IS NULL OR flag_configs.version = $7\n        RETURNING flag_id, environment_id, enabled, off_variant, fallthrough, rules, version, updated_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "flag_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "flag_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "environment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "environment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "off_variant",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "off_variant"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "fallthrough",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "fallthrough"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rules",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "rules"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "394ab51da47bc8238b20826c3ac92e307b3fef8e407e336d3cffff368dcb9c73"
+}

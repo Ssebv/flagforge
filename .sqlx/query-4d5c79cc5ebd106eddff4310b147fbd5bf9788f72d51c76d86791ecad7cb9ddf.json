@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT f.key, f.variants, c.enabled, c.off_variant, c.fallthrough, c.rules, c.version\n        FROM flag_configs c\n        JOIN flags f ON f.id = c.flag_id\n        WHERE c.environment_id = $1 AND NOT f.archived\n        ORDER BY f.key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flags",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "variants",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flags",
+            "name": "variants"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "off_variant",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "off_variant"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "fallthrough",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "fallthrough"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rules",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "rules"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "flag_configs",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4d5c79cc5ebd106eddff4310b147fbd5bf9788f72d51c76d86791ecad7cb9ddf"
+}
