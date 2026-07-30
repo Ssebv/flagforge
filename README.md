@@ -331,13 +331,15 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**136 tests**, in three layers:
+**137 tests**, in three layers:
 
 - **Domain (49).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, and any full weight partition resolves.
-- **HTTP unit (55).** Error mapping, token round trips, tampering detection,
-  the rate limiter's refill maths, key generation, OpenAPI generation.
+- **HTTP unit (56).** Error mapping, token round trips, tampering detection,
+  the rate limiter's refill maths, key generation, and OpenAPI generation
+  (including a check that the domain and storage `Flag` types do not collide
+  into one schema — utoipa keys schemas by type name).
 - **Integration (32).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`.
@@ -373,7 +375,7 @@ the Docker build (which has no database) breaks.
 | `GET /health/ready` | Readiness. Round-trips a query and reports cached environments. |
 | `GET /metrics` | Prometheus: request rate and latency by *matched* route, evaluations by reason, cache hits/misses, login failures, rate limiting. |
 | `GET /docs` | Swagger UI (non-production only). |
-| `GET /openapi.json` | The generated document. |
+| `GET /openapi.json` | The generated document. `cargo run --example dump_openapi` produces the same thing without booting anything, for client codegen in CI. |
 
 Metrics are labelled with the matched route (`/api/v1/projects/{project_key}`)
 rather than the raw URI, so cardinality stays bounded no matter how many

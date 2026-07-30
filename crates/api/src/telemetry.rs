@@ -13,8 +13,13 @@ use crate::config::RuntimeEnvironment;
 /// human-readable format locally because they are read by a person. `RUST_LOG`
 /// overrides the default filter either way.
 pub fn init_tracing(environment: RuntimeEnvironment) {
+    // `flagforge` is the binary target: startup, bind and shutdown messages
+    // come from `main.rs`, not from this library, and leaving it out of the
+    // default filter makes a booting server look silent.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("flagforge_api=info,flagforge_storage=info,tower_http=info,warn")
+        EnvFilter::new(
+            "flagforge=info,flagforge_api=info,flagforge_storage=info,tower_http=info,warn",
+        )
     });
 
     let registry = tracing_subscriber::registry().with(filter);

@@ -15,7 +15,7 @@ primary_region = "mad"
 [env]
   APP_ENV = "production"
   PORT = "8080"
-  RUST_LOG = "flagforge_api=info,flagforge_storage=info,warn"
+  RUST_LOG = "flagforge=info,flagforge_api=info,flagforge_storage=info,warn"
   # Fly's Postgres connection limit is shared across machines, so keep each
   # machine's pool modest rather than letting two machines exhaust it.
   DATABASE_MAX_CONNECTIONS = "10"

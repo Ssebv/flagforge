@@ -136,7 +136,10 @@ pub struct Rule {
 /// environment carries its own `enabled` switch, rules and rollout — that is
 /// what makes "on in staging, 5 % in production" expressible.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+// Named `FlagDefinition` in the OpenAPI document: the management API also
+// exposes a `Flag` (the stored record), and two schemas sharing a name means
+// one silently overwrites the other.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema), schema(as = FlagDefinition))]
 pub struct Flag {
     pub key: String,
     pub variants: Vec<Variant>,

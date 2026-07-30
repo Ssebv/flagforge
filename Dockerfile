@@ -6,6 +6,13 @@
 # rebuilds in seconds instead of recompiling ~400 crates.
 FROM rust:1.97-slim-bookworm AS chef
 WORKDIR /build
+
+# `utoipa-swagger-ui` fetches the Swagger UI bundle from its build script and
+# shells out to curl to do it, which the slim image does not ship.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN cargo install cargo-chef --locked --version ^0.1
 
 FROM chef AS planner
@@ -46,7 +53,7 @@ USER nonroot:nonroot
 ENV HOST=0.0.0.0 \
     PORT=8080 \
     APP_ENV=production \
-    RUST_LOG=flagforge_api=info,flagforge_storage=info,warn
+    RUST_LOG=flagforge=info,flagforge_api=info,flagforge_storage=info,warn
 
 EXPOSE 8080
 

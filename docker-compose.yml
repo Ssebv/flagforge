@@ -30,7 +30,7 @@ services:
       # store, and the server refuses to start if it is shorter than 32 chars.
       JWT_SECRET: local-development-secret-not-for-production
       APP_ENV: development
-      RUST_LOG: flagforge_api=debug,flagforge_storage=info,tower_http=info,warn
+      RUST_LOG: flagforge=info,flagforge_api=debug,flagforge_storage=info,tower_http=info,warn
       AUTO_MIGRATE: "true"
     ports:
       - "8080:8080"

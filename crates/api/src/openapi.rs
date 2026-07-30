@@ -153,6 +153,25 @@ mod tests {
         assert!(components.security_schemes.contains_key("sdk_key"));
     }
 
+    /// utoipa keys schemas by type name, so two types called `Flag` would
+    /// leave one silently overwriting the other and every `$ref` to it wrong.
+    #[test]
+    fn the_domain_and_storage_flags_do_not_collide() {
+        let document = <ApiDoc as OpenApi>::openapi();
+        let json = serde_json::to_value(&document).unwrap();
+        let schemas = &json["components"]["schemas"];
+
+        let stored = schemas["Flag"]["properties"].as_object().expect("stored Flag schema");
+        let defined =
+            schemas["FlagDefinition"]["properties"].as_object().expect("domain Flag schema");
+
+        // The stored record is the management view; the definition is what the
+        // engine evaluates. Neither should be standing in for the other.
+        assert!(stored.contains_key("archived") && stored.contains_key("project_id"));
+        assert!(defined.contains_key("fallthrough") && defined.contains_key("rules"));
+        assert!(!stored.contains_key("rules"), "the stored record absorbed the domain schema");
+    }
+
     #[test]
     fn the_document_never_mentions_a_bucketing_salt() {
         // `EnvironmentSnapshot` is exposed to SDKs; the salt must not be part
