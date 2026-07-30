@@ -1,0 +1,5 @@
+/target
+# Local credentials and overrides; commit .env.example instead.
+.env
+.env.local
+.DS_Store

@@ -1,0 +1,5 @@
+# Stable-only options, so `cargo fmt --check` behaves identically in CI and
+# on a contributor's machine regardless of toolchain channel.
+edition = "2024"
+max_width = 100
+use_small_heuristics = "Max"
