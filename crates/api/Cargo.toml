@@ -47,6 +47,7 @@ rand = { workspace = true }
 utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 
+rust-embed = { workspace = true }
 arc-swap = { workspace = true }
 dashmap = { workspace = true }
 dotenvy = { workspace = true }

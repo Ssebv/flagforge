@@ -1,0 +1,20 @@
+[build]
+target = "index.html"
+dist = "dist"
+# Relative asset URLs, so the SPA works whether it is served from the binary at
+# `/` or opened from a subdirectory during development.
+public_url = "/"
+
+[watch]
+watch = ["src", "index.html", "styles"]
+
+[serve]
+port = 8081
+# Everything the app does not recognise is proxied to the API, so `trunk serve`
+# behaves like the production single-origin deployment and there is no CORS
+# difference between dev and prod.
+[[proxy]]
+backend = "http://127.0.0.1:8080/api"
+
+[[proxy]]
+backend = "http://127.0.0.1:8080/health"

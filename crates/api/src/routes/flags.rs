@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use flagforge_core::{Distribution, Rule, Variant};
+use flagforge_storage::flags::ConfiguredFlag;
 use flagforge_storage::models::{Flag, FlagConfig, NewAuditEntry};
 use flagforge_storage::{audit, flags, projects};
 use serde::Deserialize;
@@ -269,6 +270,34 @@ pub async fn get_config(
     let flag = flags::find_flag(&state.pool, project.id, &flag_key).await?;
 
     Ok(Json(flags::find_config(&state.pool, flag.id, environment.id).await?))
+}
+
+/// Lists every flag in a project together with its configuration in one
+/// environment — one request for the whole dashboard view.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_key}/environments/{environment_key}/flags",
+    tag = "flags", security(("bearer" = [])),
+    params(
+        ListFlagsQuery,
+        ("project_key" = String, Path, description = "Project key"),
+        ("environment_key" = String, Path, description = "Environment key"),
+    ),
+    responses((status = 200, description = "Flags with their configuration here", body = Vec<ConfiguredFlag>))
+)]
+pub async fn list_configured(
+    State(state): State<AppState>,
+    caller: AuthUser,
+    Path((project_key, environment_key)): Path<(String, String)>,
+    Query(query): Query<ListFlagsQuery>,
+) -> ApiResult<Json<Vec<ConfiguredFlag>>> {
+    let project = projects::find_project(&state.pool, caller.organization_id, &project_key).await?;
+    let environment = projects::find_environment(&state.pool, project.id, &environment_key).await?;
+
+    Ok(Json(
+        flags::list_configured(&state.pool, project.id, environment.id, query.include_archived)
+            .await?,
+    ))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

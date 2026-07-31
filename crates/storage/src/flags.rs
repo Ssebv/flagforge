@@ -299,6 +299,71 @@ pub async fn upsert_config(
     )
 }
 
+/// A flag together with how it is configured in one environment.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct ConfiguredFlag {
+    pub flag: Flag,
+    pub config: FlagConfig,
+}
+
+/// Every flag in a project alongside its configuration in one environment.
+///
+/// Exists so a dashboard can render "all flags and whether each is on here" in
+/// a single round trip. Fetching the list and then one configuration per flag
+/// would be the same data in N+1 queries.
+pub async fn list_configured(
+    pool: &PgPool,
+    project_id: Uuid,
+    environment_id: Uuid,
+    include_archived: bool,
+) -> Result<Vec<ConfiguredFlag>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT f.id, f.project_id, f.key, f.name, f.description, f.variants,
+               f.archived, f.created_at, f.updated_at,
+               c.enabled, c.off_variant, c.fallthrough, c.rules, c.version,
+               c.updated_at AS config_updated_at
+        FROM flags f
+        JOIN flag_configs c ON c.flag_id = f.id
+        WHERE f.project_id = $1 AND c.environment_id = $2 AND ($3 OR NOT f.archived)
+        ORDER BY f.key
+        "#,
+        project_id,
+        environment_id,
+        include_archived,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ConfiguredFlag {
+                flag: Flag {
+                    id: row.id,
+                    project_id: row.project_id,
+                    key: row.key,
+                    name: row.name,
+                    description: row.description,
+                    variants: decode_variants(row.variants)?,
+                    archived: row.archived,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                },
+                config: build_config(
+                    row.id,
+                    environment_id,
+                    row.enabled,
+                    row.off_variant,
+                    row.fallthrough,
+                    row.rules,
+                    row.version,
+                    row.config_updated_at,
+                )?,
+            })
+        })
+        .collect()
+}
+
 /// Every flag configuration in one environment, joined with its definition.
 ///
 /// This is the query behind snapshot loading: one index scan, one round trip,

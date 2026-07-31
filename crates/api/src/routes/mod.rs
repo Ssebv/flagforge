@@ -78,6 +78,10 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
             get(flags::get).patch(flags::update).delete(flags::delete),
         )
         .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/flags",
+            get(flags::list_configured),
+        )
+        .route(
             "/api/v1/projects/{project_key}/environments/{environment_key}/flags/{flag_key}",
             get(flags::get_config).put(flags::update_config),
         )
@@ -116,7 +120,9 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
 
     let mut app = operational
         .merge(limited)
-        .fallback(unmatched)
+        // Anything the router does not know is either a mistyped API path (a
+        // problem document) or a client-side route (the SPA shell).
+        .fallback(crate::dashboard::serve)
         .layer(middleware::from_fn(observe))
         .layer(TraceLayer::new_for_http())
         .layer(PropagateRequestIdLayer::new(HeaderName::from_static(REQUEST_ID_HEADER)))
@@ -137,11 +143,6 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
     }
 
     app
-}
-
-/// A 404 that looks like every other error rather than an empty body.
-async fn unmatched() -> ApiError {
-    ApiError::NotFound("endpoint")
 }
 
 /// Times every request and records it under its *matched* route.

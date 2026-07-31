@@ -3,3 +3,9 @@
 .env
 .env.local
 .DS_Store
+
+# Trunk output. Built into the API binary at release time; the directory itself
+# is tracked (empty) so `cargo build` works without the WASM toolchain.
+/crates/web/dist/*
+!/crates/web/dist/.gitkeep
+/crates/web/target

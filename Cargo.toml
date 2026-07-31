@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/core", "crates/storage", "crates/api"]
+# `crates/web` is a WASM-only Leptos app with its own workspace; see its
+# Cargo.toml for why it is not a member here.
+exclude = ["crates/web"]
 
 [workspace.package]
 version = "0.1.0"
@@ -69,6 +72,7 @@ utoipa = { version = "5.5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 
 # Misc
+rust-embed = "8.12"
 arc-swap = "1.9"
 dashmap = "6.2"
 validator = { version = "0.21", features = ["derive"] }

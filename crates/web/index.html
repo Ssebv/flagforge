@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlagForge</title>
+    <meta name="description" content="Feature flags with targeted rollouts and an audit trail." />
+
+    <!-- Inline so the theme is settled before the first paint. Reading the
+         stored preference after hydration would flash a light page at anyone
+         who chose dark. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("flagforge.theme");
+          var dark = stored
+            ? stored === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (_) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
+
+    <link data-trunk rel="css" href="styles/app.css" />
+    <link data-trunk rel="icon" href="public/favicon.svg" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- wasm-opt needs the post-MVP features rustc now emits spelled out; the
+         bundled binaryen defaults to the MVP feature set and refuses the
+         module otherwise. -->
+    <link
+      data-trunk
+      rel="rust"
+      data-wasm-opt="z"
+      data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-reference-types --enable-sign-ext --enable-mutable-globals --enable-multivalue"
+    />
+  </head>
+
+  <body>
+    <!-- Replaced by the app on mount. Without it, a slow WASM download shows a
+         blank page and looks broken rather than loading. -->
+    <div id="boot" class="boot">
+      <div class="boot__mark" aria-hidden="true"></div>
+      <p class="boot__text">Loading FlagForge…</p>
+      <noscript>FlagForge needs JavaScript enabled.</noscript>
+    </div>
+  </body>
+</html>

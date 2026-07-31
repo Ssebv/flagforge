@@ -20,6 +20,20 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo chef prepare --recipe-path recipe.json
 
+# ------------------------------------------------------------------- web --
+# The Leptos dashboard, compiled to WebAssembly. Its own stage so the WASM
+# toolchain never lands in the server build — and so editing the API does not
+# invalidate the frontend layer, or the other way round.
+FROM chef AS web
+RUN rustup target add wasm32-unknown-unknown \
+    && cargo install trunk --locked --version ^0.21
+
+COPY crates/core ./crates/core
+COPY crates/web ./crates/web
+
+WORKDIR /build/crates/web
+RUN trunk build --release
+
 # ----------------------------------------------------------------- builder --
 FROM chef AS builder
 
@@ -35,13 +49,17 @@ COPY crates ./crates
 COPY migrations ./migrations
 COPY .sqlx ./.sqlx
 
+# The compiled dashboard is embedded into the binary by `rust-embed`, so it has
+# to be in place before the server is built.
+COPY --from=web /build/crates/web/dist ./crates/web/dist
+
 RUN cargo build --release --bin flagforge && \
     strip target/release/flagforge
 
 # ---------------------------------------------------------------- runtime --
 # Distroless: no shell, no package manager, nothing for an attacker who gets
-# code execution to pivot with. The binary is statically linked against
-# everything except libc and ships with CA certificates for TLS to Postgres.
+# code execution to pivot with. One binary contains the API, the migrations and
+# the dashboard.
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 WORKDIR /app

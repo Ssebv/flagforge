@@ -76,6 +76,44 @@ async fn the_same_email_cannot_register_twice(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
+async fn two_unrelated_companies_may_share_a_name(pool: PgPool) {
+    let app = TestApp::new(pool);
+
+    let first = app
+        .post(
+            "/api/v1/auth/register",
+            None,
+            json!({
+                "organization_name": "Acme Inc",
+                "email": "ada@acme.test",
+                "password": "correct-horse-battery-staple",
+            }),
+        )
+        .await
+        .expect(StatusCode::CREATED);
+
+    // Plenty of unrelated companies are called the same thing, and there is no
+    // flow for joining someone else's organization — so a taken slug must not
+    // be a dead end at signup.
+    let second = app
+        .post(
+            "/api/v1/auth/register",
+            None,
+            json!({
+                "organization_name": "Acme Inc",
+                "email": "eve@other.test",
+                "password": "correct-horse-battery-staple",
+            }),
+        )
+        .await
+        .expect(StatusCode::CREATED);
+
+    assert_eq!(first["organization"]["slug"], "acme-inc");
+    assert_eq!(second["organization"]["slug"], "acme-inc-2");
+    assert_ne!(first["organization"]["id"], second["organization"]["id"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
 async fn login_accepts_the_right_password_and_refuses_the_wrong_one(pool: PgPool) {
     let app = TestApp::new(pool);
     app.register("Acme", "ada@acme.test").await;

@@ -1,0 +1,5 @@
+# `cargo check` and `cargo clippy` in this directory default to the only target
+# this crate can compile for, so a contributor does not have to remember the
+# flag.
+[build]
+target = "wasm32-unknown-unknown"

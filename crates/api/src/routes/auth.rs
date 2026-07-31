@@ -3,6 +3,7 @@
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
+use flagforge_storage::StorageError;
 use flagforge_storage::accounts;
 use flagforge_storage::models::{Organization, User};
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,7 @@ pub struct RegisterResponse {
     responses(
         (status = 201, description = "Organization created", body = RegisterResponse),
         (status = 400, description = "Malformed input"),
-        (status = 409, description = "That email or organization already exists"),
+        (status = 409, description = "That email already has an account"),
     )
 )]
 pub async fn register(
@@ -83,9 +84,7 @@ pub async fn register(
     let hash =
         password::hash(&body.password).map_err(|err| ApiError::BadRequest(err.to_string()))?;
 
-    let (organization, user) =
-        accounts::create_organization_with_owner(&state.pool, name, &slugify(name), &email, &hash)
-            .await?;
+    let (organization, user) = register_with_free_slug(&state, name, &email, &hash).await?;
 
     let token = state
         .tokens
@@ -186,11 +185,49 @@ fn looks_like_email(candidate: &str) -> bool {
     }
 }
 
-/// Derives a URL-safe organization slug.
+/// How many slug variants to try before giving up.
+const SLUG_ATTEMPTS: u32 = 12;
+
+/// Creates the organization, working around a slug another tenant already has.
 ///
-/// A trailing suffix is *not* added here: uniqueness is the database's job, so
-/// a collision surfaces as a clean 409 instead of silently creating
-/// `acme-inc-2` for someone who meant to join `acme-inc`.
+/// Slugs are globally unique, but organization *names* are not — "Acme Inc"
+/// is a name plenty of unrelated companies use. Since there is no flow for
+/// joining an existing organization, returning a 409 here would leave a
+/// legitimate signup with no way forward, so a colliding slug gets a numeric
+/// suffix instead. A duplicate *email* still conflicts: that one really does
+/// mean "you already have an account".
+async fn register_with_free_slug(
+    state: &AppState,
+    name: &str,
+    email: &str,
+    password_hash: &str,
+) -> ApiResult<(Organization, User)> {
+    let base = slugify(name);
+
+    for attempt in 1..=SLUG_ATTEMPTS {
+        let slug = if attempt == 1 { base.clone() } else { format!("{base}-{attempt}") };
+
+        match accounts::create_organization_with_owner(
+            &state.pool,
+            name,
+            &slug,
+            email,
+            password_hash,
+        )
+        .await
+        {
+            Ok(created) => return Ok(created),
+            Err(StorageError::Conflict { entity: "organization", .. }) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Err(ApiError::Conflict(format!(
+        "could not derive a free identifier from `{name}` — try a more specific name"
+    )))
+}
+
+/// Derives a URL-safe organization slug.
 fn slugify(name: &str) -> String {
     let mut slug = String::with_capacity(name.len());
     let mut last_was_dash = true; // suppresses a leading dash

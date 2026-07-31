@@ -13,6 +13,7 @@
 pub mod auth;
 pub mod cache;
 pub mod config;
+pub mod dashboard;
 pub mod error;
 pub mod openapi;
 pub mod rate_limit;

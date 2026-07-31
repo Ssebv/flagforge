@@ -2,11 +2,16 @@
 
 **A multi-tenant feature-flag service in Rust.** Targeted rollouts, deterministic
 bucketing, and an audit trail — with evaluation served from memory in
-microseconds.
+microseconds, and a dashboard compiled to WebAssembly from the same codebase.
 
 [![CI](https://github.com/your-user/flagforge/actions/workflows/ci.yml/badge.svg)](https://github.com/your-user/flagforge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
+![No JavaScript build](https://img.shields.io/badge/frontend-Leptos%20%2F%20WASM-orange.svg)
+
+![The flag list](docs/screenshots/flags-light.png)
+
+*One binary: API, migrations and dashboard. No Node anywhere in the build.*
 
 ---
 
@@ -30,6 +35,8 @@ FlagForge is the service behind that question:
 - **Two credential types.** Short-lived JWTs for humans, long-lived scoped keys
   for SDKs. Neither is accepted where the other belongs.
 - **An audit trail.** Every change, with before/after and who made it.
+- **A dashboard**, written in Rust with Leptos and compiled to WebAssembly —
+  and embedded in the API binary, so the whole product is still one container.
 
 ---
 
@@ -74,6 +81,7 @@ Three crates, with the dependency arrow pointing one way:
 | **`flagforge-core`** | Domain model + evaluation engine | No async runtime, no database, no HTTP. Evaluation is a pure function of `(flag, context, salt)`, so the part that has to be *correct* can be tested exhaustively — including property tests over the hash distribution. |
 | **`flagforge-storage`** | PostgreSQL persistence | Every query is verified against the real schema at compile time by `sqlx`. A column rename breaks the build, not production. |
 | **`flagforge-api`** | HTTP, auth, caching, OpenAPI | Exposed as a library too, so integration tests drive the *real* router over a *real* database. |
+| **`flagforge-web`** | The dashboard, Leptos → WASM | Reuses `flagforge-core`, so the rule editor validates and previews with the engine the server runs. Its own workspace, because it only ever targets `wasm32`. |
 
 ---
 
@@ -85,7 +93,10 @@ docker compose up --build
 ```
 
 That brings up Postgres and the API on `http://localhost:8080`, applying
-migrations on boot. Interactive docs: **http://localhost:8080/docs**.
+migrations on boot.
+
+- **Dashboard**: http://localhost:8080/
+- **Interactive API docs**: http://localhost:8080/docs
 
 <details>
 <summary>Running it natively instead</summary>
@@ -172,6 +183,74 @@ curl -s -X POST $BASE/api/v1/evaluate/checkout.v2 \
 
 The `reason` is the point. When someone asks *"why did this user see the new
 checkout?"*, the answer is in the response — not in a debugging session.
+
+---
+
+## The dashboard
+
+Written in Rust with [Leptos](https://leptos.dev), compiled to WebAssembly, and
+embedded in the API binary with `rust-embed`. There is no Node in the build and
+no second thing to deploy — the server that answers `/api/v1/evaluate` also
+serves the page you configure it from, which means the API and its UI can never
+be different versions.
+
+### The rule editor runs the real evaluation engine
+
+<img src="docs/screenshots/flag-editor.png" alt="The flag editor with a targeting rule, a rollout slider and a live preview" />
+
+Because `flagforge-core` has no I/O and no async, the *same crate* compiles to
+WASM. The editor is not approximating what the server would do — it is calling
+`flagforge_core::evaluate` and `flagforge_core::validate` directly:
+
+- **Validation is the server's validation.** A rollout that does not sum to
+  100 % is caught as you type, with the same message and the same field path
+  the API would have returned. The Save button stays disabled.
+- **The preview is the engine.** Type a context and see which rule matched and
+  why — no round trip, no drift between "what the UI thinks" and "what
+  production does".
+- **The simulation is exact.** It evaluates 2 000 synthetic subjects to show
+  the real split. Aggregate distribution does not depend on the bucketing salt,
+  so those percentages are what production will do. Which side one *specific*
+  user lands on does depend on the salt, and the salt never leaves the server —
+  so the UI says that rather than pretending otherwise.
+
+### The rest of it
+
+| | |
+| --- | --- |
+| <img src="docs/screenshots/audit-log.png" alt="Audit log with an expanded before/after diff" /> | **Audit log** with a before/after diff on every change. |
+| <img src="docs/screenshots/sdk-keys.png" alt="SDK key creation showing the secret once" /> | **SDK keys**, with the secret shown exactly once — only its hash is stored. |
+| <img src="docs/screenshots/flags-dark.png" alt="The flag list in the dark theme" /> | **Light and dark**, chosen from the OS and then remembered. Set before first paint, so there is no flash. |
+
+Details that took the most care:
+
+- **Optimistic toggles.** Flipping a flag moves the switch immediately and
+  rolls back if the write is rejected. Every write carries the version it read,
+  so losing a race to another operator produces "someone else changed this
+  flag" and a reload — never a silent overwrite.
+- **Loading, empty and failed are three different screens.** Fetches are
+  modelled as `Load::{Loading, Ready, Failed}` rather than as an absent value,
+  so a slow request shows skeletons, an empty project explains what to do next,
+  and a failure offers a retry.
+- **Deep links work.** `/projects/checkout/flags/checkout.v2` survives a reload:
+  unknown paths return the SPA shell, while anything under `/api/` stays a
+  problem document instead of becoming a page of HTML.
+- **Keyboard and screen readers.** The switch is a real `role="switch"`, modals
+  close on Escape and on a backdrop click, and every control's accessible name
+  contains its visible text (WCAG 2.5.3).
+
+### Working on it
+
+```bash
+cargo run --bin flagforge                      # API on :8080
+cd crates/web && trunk serve                   # dashboard on :8081, API proxied
+```
+
+`crates/web` is a separate workspace targeting `wasm32-unknown-unknown` only,
+so `cargo build` at the repository root stays a native build and never drags a
+WASM toolchain into it. `trunk build --release` writes `crates/web/dist`, which
+the server build embeds; without it the binary still runs and simply reports
+that no dashboard is bundled.
 
 ---
 
@@ -418,8 +497,11 @@ flagforge/
 │   │   ├── matcher.rs     # targeting operators
 │   │   └── validate.rs    # what may never reach the database
 │   ├── storage/       # sqlx repositories, compile-time-checked SQL
-│   └── api/           # axum handlers, auth, cache, OpenAPI
-│       └── tests/         # integration suite over a real Postgres
+│   ├── api/           # axum handlers, auth, cache, OpenAPI
+│   │   └── tests/         # integration suite over a real Postgres
+│   └── web/           # Leptos dashboard -> WASM, own workspace
+│       ├── src/pages/     # login, projects, flags, keys, audit
+│       └── styles/        # handwritten design system, light + dark
 ├── migrations/        # schema + NOTIFY triggers
 ├── .sqlx/             # offline query cache, so CI and Docker need no database
 └── .github/workflows/ # fmt · clippy · test · audit · docker

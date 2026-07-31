@@ -59,6 +59,13 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("could not bind {address}"))?;
 
     tracing::info!(%address, "listening");
+    if flagforge_api::dashboard::is_bundled() {
+        tracing::info!("dashboard at http://{address}/");
+    } else {
+        tracing::warn!(
+            "no dashboard bundled; run `trunk build --release` in crates/web to include it"
+        );
+    }
     if show_docs {
         tracing::info!("API documentation at http://{address}/docs");
     }

@@ -1,0 +1,48 @@
+# Its own workspace on purpose.
+#
+# This crate only ever compiles for `wasm32-unknown-unknown`, so keeping it out
+# of the server workspace means `cargo build --workspace` at the repo root
+# stays a native build and never drags a WASM toolchain into it. Trunk builds
+# this one; the path dependency on `flagforge-core` still works across the
+# boundary.
+[workspace]
+
+[package]
+name = "flagforge-web"
+description = "FlagForge dashboard: a Leptos single-page app compiled to WebAssembly."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[dependencies]
+# The same evaluation engine and validator the server runs. Reusing it is what
+# lets the rule editor preview a decision in the browser without a round trip —
+# and guarantees the preview cannot disagree with production.
+flagforge-core = { path = "../core" }
+
+leptos = { version = "0.8", features = ["csr"] }
+leptos_router = { version = "0.8" }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.24", features = ["v4", "serde", "js"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "wasmbind", "clock"] }
+
+gloo-net = { version = "0.7", default-features = false, features = ["http", "json"] }
+gloo-storage = "0.4"
+gloo-timers = { version = "0.4", features = ["futures"] }
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Clipboard", "Crypto", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement", "MediaQueryList"] }
+console_error_panic_hook = "0.1"
+
+[profile.release]
+# The whole payload crosses the wire on first load, so size is the metric that
+# matters here rather than raw speed.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

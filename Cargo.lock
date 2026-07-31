@@ -710,6 +710,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.10.2",
+ "rust-embed",
  "serde",
  "serde_json",
  "sha2 0.11.0",

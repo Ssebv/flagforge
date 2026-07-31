@@ -81,6 +81,50 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features
 
+  dashboard:
+    name: Dashboard (WASM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/web
+
+      - name: Install Trunk
+        uses: jetli/trunk-action@v0.5.0
+        with:
+          version: latest
+
+      - name: Check formatting
+        working-directory: crates/web
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: crates/web
+        run: cargo clippy --all-targets
+
+      - name: Build the bundle
+        working-directory: crates/web
+        run: trunk build --release
+
+      - name: Report bundle size
+        working-directory: crates/web
+        run: |
+          # The whole payload crosses the wire on first load, so a regression
+          # here is a user-visible one.
+          echo "### Dashboard bundle" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh dist | awk '{print $5, $9}' >> "$GITHUB_STEP_SUMMARY"
+          gzip -c dist/*_bg.wasm | wc -c \
+            | awk '{printf "wasm gzipped: %.2f MB\n", $1/1048576}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
   audit:
     name: Security audit
     runs-on: ubuntu-latest
@@ -93,7 +137,7 @@ jobs:
   docker:
     name: Docker image
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, dashboard]
     steps:
       - uses: actions/checkout@v4
 
@@ -124,13 +168,29 @@ jobs:
 
           # The image runs its own migrations on boot; if that fails, so does
           # this.
+          ready=false
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/health/ready; then
-              echo "ready"; exit 0
+              ready=true; break
             fi
             sleep 2
           done
 
-          echo "the container never became ready"
-          docker logs api
-          exit 1
+          if [ "$ready" != true ]; then
+            echo "the container never became ready"
+            docker logs api
+            exit 1
+          fi
+
+          # The dashboard is embedded in the same binary; if the Trunk stage
+          # silently produced nothing, this is where it shows up.
+          echo
+          curl -sf http://localhost:8080/ | grep -q "FlagForge" \
+            || { echo "the dashboard was not served"; docker logs api; exit 1; }
+          echo "dashboard served"
+
+          # A deep link must return the SPA shell, and a bad API path must not.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/projects/x)" = 200
+          curl -s http://localhost:8080/api/v1/nope | grep -q '"type":"not_found"'
+          echo "routing behaves"
+
