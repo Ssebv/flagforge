@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO flag_configs (flag_id, environment_id, enabled, off_variant, fallthrough, rules)\n        SELECT\n            f.id,\n            $1,\n            FALSE,\n            COALESCE(reference.off_variant, defaults.variant),\n            COALESCE(\n                reference.fallthrough,\n                jsonb_build_object('kind', 'fixed', 'variant', defaults.variant)\n            ),\n            '[]'::JSONB\n        FROM flags f\n        LEFT JOIN LATERAL (\n            SELECT c.off_variant, c.fallthrough\n            FROM flag_configs c\n            JOIN environments e ON e.id = c.environment_id\n            WHERE c.flag_id = f.id\n            ORDER BY e.created_at, e.id\n            LIMIT 1\n        ) reference ON TRUE\n        LEFT JOIN LATERAL (\n            SELECT element ->> 'key' AS variant\n            FROM jsonb_array_elements(f.variants) WITH ORDINALITY AS variants(element, position)\n            ORDER BY (element ->> 'key' <> 'off'), position\n            LIMIT 1\n        ) defaults ON TRUE\n        WHERE f.project_id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "18007df8167820a92cd29ba2fda155a3ae46e8cc30dfb78e2506911257cb296a"
+}

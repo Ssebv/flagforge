@@ -40,6 +40,110 @@ async fn a_new_flag_is_off_in_every_environment(pool: PgPool) {
     assert_eq!(decision["reason"]["kind"], "off");
 }
 
+/// The other direction: the environment arrives *after* the flags.
+///
+/// Adding `staging` to a project that already has flags is the ordinary
+/// lifecycle, and it used to leave those flags with no configuration there —
+/// missing from the dashboard and from the snapshot, so an SDK fell back to
+/// its own default with nothing to distinguish that from "off".
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_flag_defined_before_an_environment_is_still_configured_in_it(pool: PgPool) {
+    let app = TestApp::new(pool);
+    let tenant = app.bootstrap("Acme", "ada@acme.test").await;
+
+    app.create_flag(&tenant.token, "checkout.v2").await;
+    app.configure(&tenant.token, "checkout.v2", simple_config(true, "on"))
+        .await
+        .expect(StatusCode::OK);
+
+    // Only now does the second environment exist.
+    app.post(
+        "/api/v1/projects/checkout/environments",
+        Some(&tenant.token),
+        json!({"key": "staging", "name": "Staging"}),
+    )
+    .await
+    .expect(StatusCode::CREATED);
+
+    let listed = app
+        .get("/api/v1/projects/checkout/environments/staging/flags", Some(&tenant.token))
+        .await
+        .expect(StatusCode::OK);
+    assert_eq!(
+        listed.as_array().map(Vec::len),
+        Some(1),
+        "the flag must be listed in the new environment"
+    );
+
+    let config = app
+        .get(
+            "/api/v1/projects/checkout/environments/staging/flags/checkout.v2",
+            Some(&tenant.token),
+        )
+        .await
+        .expect(StatusCode::OK);
+
+    // Seeded, not inherited: a new environment starts inert, and production's
+    // targeting does not follow it in.
+    assert_eq!(config["enabled"], false, "a seeded flag must start off");
+    assert_eq!(config["rules"].as_array().map(Vec::len), Some(0));
+    assert_eq!(config["off_variant"], "off");
+
+    // And an SDK pointed at the new environment resolves it rather than
+    // reporting a flag that does not exist.
+    let key = app
+        .post(
+            "/api/v1/projects/checkout/environments/staging/keys",
+            Some(&tenant.token),
+            json!({"name": "staging-backend", "scope": "server"}),
+        )
+        .await
+        .expect(StatusCode::CREATED);
+    let staging_key = key["secret"].as_str().unwrap();
+
+    let decision = app.evaluate(staging_key, "checkout.v2", json!({"key": "u"})).await;
+    assert_eq!(decision["reason"]["kind"], "off", "not `flag_not_found`");
+    assert_eq!(decision["value"], false);
+}
+
+/// A flag can also be defined while the project has no environments at all,
+/// leaving no configuration anywhere to copy from.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_flag_defined_before_any_environment_exists_is_seeded_from_its_variants(pool: PgPool) {
+    let app = TestApp::new(pool);
+    let token = app.register("Acme", "ada@acme.test").await;
+
+    app.post("/api/v1/projects", Some(&token), json!({"key": "checkout", "name": "Checkout"}))
+        .await
+        .expect(StatusCode::CREATED);
+
+    app.post(
+        "/api/v1/projects/checkout/flags",
+        Some(&token),
+        json!({"key": "checkout.v2", "name": "Checkout v2"}),
+    )
+    .await
+    .expect(StatusCode::CREATED);
+
+    app.post(
+        "/api/v1/projects/checkout/environments",
+        Some(&token),
+        json!({"key": "production", "name": "Production", "is_production": true}),
+    )
+    .await
+    .expect(StatusCode::CREATED);
+
+    let config = app
+        .get("/api/v1/projects/checkout/environments/production/flags/checkout.v2", Some(&token))
+        .await
+        .expect(StatusCode::OK);
+
+    assert_eq!(config["enabled"], false);
+    assert_eq!(config["off_variant"], "off");
+    assert_eq!(config["fallthrough"]["kind"], "fixed");
+    assert_eq!(config["fallthrough"]["variant"], "off");
+}
+
 #[sqlx::test(migrations = "../../migrations")]
 async fn enabling_a_flag_changes_what_the_sdk_sees(pool: PgPool) {
     let app = TestApp::new(pool);
