@@ -116,14 +116,23 @@ impl FromRequestParts<AppState> for SdkIdentity {
             .await?
             .ok_or(ApiError::Unauthorized("unknown or revoked SDK key"))?;
 
-        // Usage tracking must never delay or fail the request it describes.
-        let pool = state.pool.clone();
+        // Usage tracking must never delay or fail the request it describes —
+        // and on a path an SDK hits on every one of its own requests, it must
+        // not touch the database either. The tracker collapses a minute of
+        // traffic into a single write; see `auth::usage`.
         let key_id = identity.api_key_id;
-        tokio::spawn(async move {
-            if let Err(error) = api_keys::touch(&pool, key_id).await {
-                tracing::debug!(%error, "could not record SDK key usage");
-            }
-        });
+        if state.key_usage.should_record(key_id) {
+            // Counted so the saving is visible rather than assumed: divided by
+            // the request count, this is what the bookkeeping actually costs.
+            metrics::counter!("flagforge_api_key_usage_writes_total").increment(1);
+
+            let pool = state.pool.clone();
+            tokio::spawn(async move {
+                if let Err(error) = api_keys::touch(&pool, key_id).await {
+                    tracing::debug!(%error, "could not record SDK key usage");
+                }
+            });
+        }
 
         Ok(Self(identity))
     }
