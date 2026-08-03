@@ -1,3 +1,9 @@
 [toolchain]
 channel = "1.97"
 components = ["rustfmt", "clippy"]
+# The dashboard only ever compiles for WebAssembly. Declaring the target here
+# rather than installing it in CI means rustup adds it to *this* toolchain, on
+# every machine that checks the repository out. Naming it in the workflow
+# instead installed it against `stable`, which the pin then overrode, so the
+# WASM build failed looking for a `core` it had never been given.
+targets = ["wasm32-unknown-unknown"]
