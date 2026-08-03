@@ -470,8 +470,16 @@ fn describe_targeting(
         return "—".to_owned();
     }
 
+    // Phrased to read as a sentence in both shapes: "everyone gets on" when
+    // there is nothing else to say, and "1 rule, then on" when there is.
     let base = match fallthrough {
-        Distribution::Fixed { variant } => format!("everyone gets {variant}"),
+        Distribution::Fixed { variant } => {
+            if rules == 0 {
+                format!("everyone gets {variant}")
+            } else {
+                variant.clone()
+            }
+        }
         Distribution::Rollout { weights, .. } => {
             // Report the share that is *receiving* the feature. Summarising a
             // 25% rollout as "75% off" is true and useless: the number an

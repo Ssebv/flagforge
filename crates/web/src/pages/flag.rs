@@ -743,7 +743,7 @@ fn FallthroughEditor(
         <div class="card">
             <div class="card__header">
                 <h2 class="card__title">"Default distribution"</h2>
-                <span class="hint">"Applies to everyone no rule matched."</span>
+                <span class="hint">"Used when no targeting rule matches."</span>
             </div>
 
             <div class="card__body stack">

@@ -11,11 +11,65 @@ use flagforge_storage::PoolConfig;
 use tokio::signal;
 use tokio::sync::Notify;
 
+/// What the binary was asked to do.
+///
+/// Hand-rolled rather than a CLI framework: there is exactly one subcommand,
+/// and `clap` would be a dependency and a compile-time cost for parsing three
+/// arguments.
+enum Command {
+    Serve,
+    Seed(flagforge_api::seed::Credentials),
+}
+
+fn parse_command() -> anyhow::Result<Command> {
+    let mut args = std::env::args().skip(1);
+
+    match args.next().as_deref() {
+        None => Ok(Command::Serve),
+        Some("serve") => Ok(Command::Serve),
+        Some("seed") => {
+            let mut credentials = flagforge_api::seed::Credentials::default();
+            while let Some(flag) = args.next() {
+                match flag.as_str() {
+                    "--email" => {
+                        credentials.email = args.next().context("--email needs a value")?;
+                    }
+                    "--password" => {
+                        credentials.password = args.next().context("--password needs a value")?;
+                    }
+                    other => anyhow::bail!("unknown option `{other}` for `seed`"),
+                }
+            }
+            Ok(Command::Seed(credentials))
+        }
+        Some("--help" | "-h" | "help") => {
+            println!("{USAGE}");
+            std::process::exit(0);
+        }
+        Some(other) => anyhow::bail!("unknown command `{other}`\n\n{USAGE}"),
+    }
+}
+
+const USAGE: &str = "\
+flagforge — a multi-tenant feature-flag service
+
+USAGE:
+    flagforge [serve]                 Run the API and dashboard (default)
+    flagforge seed [OPTIONS]          Fill an empty database with a demo organization
+
+SEED OPTIONS:
+    --email <EMAIL>                   Owner address    [default: ada@acme.test]
+    --password <PASSWORD>             Owner password   [default: correct-horse-battery-staple]
+
+Configuration is read from the environment; see .env.example.";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Only for local development; in a container the environment *is* the
     // environment, and a stray .env would silently shadow it.
     let _ = dotenvy::dotenv();
+
+    let command = parse_command()?;
 
     let config = Config::from_env().map_err(|errors| {
         let details = errors.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n");
@@ -42,6 +96,10 @@ async fn main() -> anyhow::Result<()> {
     if config.database.auto_migrate {
         flagforge_storage::migrate(&pool).await.context("failed to apply migrations")?;
         tracing::info!("migrations are up to date");
+    }
+
+    if let Command::Seed(credentials) = command {
+        return flagforge_api::seed::run(&pool, credentials).await;
     }
 
     let database_url = config.database.url.clone();

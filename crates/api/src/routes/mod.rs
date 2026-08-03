@@ -205,7 +205,7 @@ pub(crate) fn valid_key(candidate: &str, field: &'static str) -> Result<(), ApiE
 }
 
 /// 256 bits of CSPRNG output, used as an environment's bucketing salt.
-pub(crate) fn new_salt() -> String {
+pub fn new_salt() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
