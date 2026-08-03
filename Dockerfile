@@ -28,6 +28,12 @@ FROM chef AS web
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install trunk --locked --version ^0.21
 
+# The root manifest, even though nothing here builds from it: `crates/core`
+# inherits `edition` and friends from `workspace.package`, so cargo has to be
+# able to find the workspace root before it can so much as parse core's
+# manifest. Only the file is needed, not the other members — `crates/web` is
+# its own workspace, so the root is read for inheritance and never loaded.
+COPY Cargo.toml ./
 COPY crates/core ./crates/core
 COPY crates/web ./crates/web
 
