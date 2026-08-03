@@ -35,7 +35,7 @@ gloo-timers = { version = "0.4", features = ["futures"] }
 
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Navigator", "Clipboard", "Crypto", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement", "MediaQueryList"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Clipboard", "Crypto", "Element", "HtmlElement", "KeyboardEvent", "NodeList", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement", "MediaQueryList"] }
 console_error_panic_hook = "0.1"
 
 [profile.release]

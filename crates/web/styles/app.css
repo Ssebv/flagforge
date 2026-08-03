@@ -79,7 +79,7 @@
   --accent-hover: var(--amber-700);
   --accent-fg: #ffffff;
   --accent-soft: #fef3e2;
-  --accent-soft-fg: var(--amber-700);
+  --accent-soft-fg: #8a3f07;
 
   --success: var(--green-600);
   --success-soft: #dcfce7;
@@ -87,6 +87,16 @@
   --danger-soft: #fee2e2;
   --info-soft: #dbeafe;
   --info-fg: #1d4ed8;
+
+  /* Accent as *text* needs to be darker than accent as a fill: #d97706 on
+     white is 3.0:1, which fails for anything but large text. */
+  --accent-text: var(--amber-700);
+
+  --bar-fg: #ffffff;
+  --bar-0: var(--amber-700);
+  --bar-1: var(--grey-600);
+  --bar-2: #1d4ed8;
+  --bar-3: #166534;
 
   --shadow-sm: 0 1px 2px rgb(23 20 18 / 0.06), 0 1px 1px rgb(23 20 18 / 0.04);
   --shadow: 0 4px 12px rgb(23 20 18 / 0.08), 0 1px 3px rgb(23 20 18 / 0.05);
@@ -121,6 +131,15 @@
   --danger-soft: #3a1717;
   --info-soft: #17233d;
   --info-fg: #93c5fd;
+
+  --accent-text: var(--amber-400);
+
+  /* On dark, the fills are light and the label goes dark. */
+  --bar-fg: var(--grey-950);
+  --bar-0: var(--amber-500);
+  --bar-1: var(--grey-400);
+  --bar-2: #60a5fa;
+  --bar-3: #4ade80;
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow: 0 4px 14px rgb(0 0 0 / 0.5);
@@ -187,7 +206,7 @@ h3 {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -326,7 +345,9 @@ code {
   font-weight: 620;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-subtle);
+  /* `--text-subtle` lands at 4.35:1 here — close enough to look fine and
+     still a failure. */
+  color: var(--text-muted);
 }
 
 .nav__link {
@@ -797,7 +818,7 @@ code {
   font-weight: 620;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--text-subtle);
+  color: var(--text-muted);
   background: var(--surface-sunken);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -920,7 +941,7 @@ code {
 }
 
 .tab[aria-selected="true"] {
-  color: var(--accent);
+  color: var(--accent-text);
   border-bottom-color: var(--accent);
 }
 
@@ -1231,19 +1252,26 @@ code {
 /* Keyed to the variant's position in the flag definition rather than to its
  * position in the bar. Two bars on the same screen can list variants in
  * different orders, and a variant that changes colour between them reads as a
- * different variant. */
+ * different variant.
+ *
+ * The fills are their own tokens rather than reuses of the accent and status
+ * colours: those are tuned to sit *next to* text, and label-on-fill needs
+ * 4.5:1 against the fill itself, which the mid-tones do not clear. */
 .dist__part--0 {
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: var(--bar-0);
+  color: var(--bar-fg);
 }
 .dist__part--1 {
-  background: var(--grey-400);
+  background: var(--bar-1);
+  color: var(--bar-fg);
 }
 .dist__part--2 {
-  background: var(--blue-500);
+  background: var(--bar-2);
+  color: var(--bar-fg);
 }
 .dist__part--3 {
-  background: var(--green-500);
+  background: var(--bar-3);
+  color: var(--bar-fg);
 }
 
 .preview {
