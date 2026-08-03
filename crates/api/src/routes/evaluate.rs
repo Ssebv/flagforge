@@ -117,15 +117,41 @@ pub async fn evaluate_one(
     Ok(Json(evaluation))
 }
 
+/// Everything a server-side SDK needs to evaluate locally.
+///
+/// `EnvironmentSnapshot` deliberately refuses to serialize its salt, because
+/// most things that carry a snapshot must not leak it. This endpoint is the one
+/// place that has to: see [`snapshot`].
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SnapshotResponse {
+    pub environment_id: uuid::Uuid,
+    pub environment_key: String,
+    /// Per-environment bucketing salt.
+    ///
+    /// Without it an SDK could match targeting rules but would bucket
+    /// percentage rollouts against a different salt than the server — every
+    /// answer plausible, half of them wrong, and nothing to indicate it.
+    pub salt: String,
+    pub flags: std::collections::BTreeMap<String, flagforge_core::Flag>,
+    pub version: i64,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// The whole environment configuration, for SDKs that evaluate locally.
 ///
-/// Shipping the rules rather than the decisions is what lets a client-side SDK
-/// answer without a network round trip per flag. The bucketing salt is
-/// deliberately excluded from the payload.
+/// Shipping the rules rather than the decisions is what lets an SDK answer
+/// without a network round trip per flag.
+///
+/// This is the only endpoint that discloses the bucketing salt, and only to
+/// server-scoped keys. That is not a weakening of the secret: a caller holding
+/// this response already has every targeting rule, and could determine any
+/// user's assignment by simply asking `/evaluate`. Withholding the salt would
+/// not protect anything — it would only make local evaluation silently
+/// disagree with the server.
 #[utoipa::path(
     get, path = "/api/v1/snapshot", tag = "evaluate", security(("sdk_key" = [])),
     responses(
-        (status = 200, description = "Flag configuration for the caller's environment"),
+        (status = 200, description = "Flag configuration and bucketing salt", body = SnapshotResponse),
         (status = 401, description = "Missing, unknown or revoked SDK key"),
         (status = 403, description = "Client-scoped keys cannot download rules"),
     )
@@ -133,10 +159,11 @@ pub async fn evaluate_one(
 pub async fn snapshot(
     State(state): State<AppState>,
     identity: SdkIdentity,
-) -> ApiResult<Json<flagforge_core::EnvironmentSnapshot>> {
+) -> ApiResult<Json<SnapshotResponse>> {
     // Targeting rules name attributes and segments — "employees", "beta
-    // customers", specific emails. That is internal information, so a key that
-    // ships to browsers only gets decisions, never the rules behind them.
+    // customers", specific emails — and the salt makes rollout membership
+    // computable. Neither belongs in a browser, so a client-scoped key gets
+    // decisions only.
     if identity.scope() == flagforge_storage::models::KeyScope::Client {
         return Err(ApiError::Forbidden(
             "client-scoped keys can evaluate but cannot download targeting rules",
@@ -144,7 +171,15 @@ pub async fn snapshot(
     }
 
     let snapshot = state.cache.get(identity.environment_id()).await?;
-    Ok(Json((*snapshot).clone()))
+
+    Ok(Json(SnapshotResponse {
+        environment_id: snapshot.environment_id,
+        environment_key: snapshot.environment_key.clone(),
+        salt: snapshot.salt.clone(),
+        flags: snapshot.flags.clone(),
+        version: snapshot.version,
+        generated_at: snapshot.generated_at,
+    }))
 }
 
 fn check_context(context: &EvaluationContext) -> Result<(), ApiError> {

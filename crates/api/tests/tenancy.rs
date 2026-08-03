@@ -103,29 +103,50 @@ async fn a_client_scoped_key_can_evaluate_but_not_download_the_rules(pool: PgPoo
     let snapshot = app.get("/api/v1/snapshot", Some(&client_key)).await;
     assert_eq!(snapshot.status, StatusCode::FORBIDDEN);
 
-    // A server key may.
+    // A server key may, and gets the salt with it.
     let allowed = app.get("/api/v1/snapshot", Some(&tenant.sdk_key)).await.expect(StatusCode::OK);
     assert!(allowed["flags"].is_object());
+    assert!(allowed["salt"].as_str().is_some_and(|s| !s.is_empty()));
 }
 
+/// A server-scoped key must receive the salt: without it an SDK evaluating
+/// locally would bucket rollouts differently from the server, and every answer
+/// would look plausible. Nothing else may disclose it.
 #[sqlx::test(migrations = "../../migrations")]
-async fn the_snapshot_never_carries_the_bucketing_salt(pool: PgPool) {
+async fn the_salt_reaches_server_keys_and_nothing_else(pool: PgPool) {
     let app = TestApp::new(pool);
     let tenant = app.bootstrap("Acme", "ada@acme.test").await;
     app.create_flag(&tenant.token, "checkout.v2").await;
-
-    let snapshot = app.get("/api/v1/snapshot", Some(&tenant.sdk_key)).await.expect(StatusCode::OK);
-
-    // Knowing the salt would let anyone precompute exactly who a rollout hits.
-    assert!(snapshot.get("salt").is_none(), "{snapshot}");
-    assert!(!snapshot.to_string().contains("salt"), "{snapshot}");
 
     let stored_salt: String =
         sqlx::query_scalar("SELECT salt FROM environments WHERE key = 'production'")
             .fetch_one(&app.pool)
             .await
             .unwrap();
-    assert!(!snapshot.to_string().contains(&stored_salt));
+
+    let snapshot = app.get("/api/v1/snapshot", Some(&tenant.sdk_key)).await.expect(StatusCode::OK);
+    assert_eq!(snapshot["salt"], stored_salt, "a server key needs the salt to bucket correctly");
+
+    // An evaluation response is a decision, not a configuration; it has no
+    // business carrying the salt.
+    let decision = app
+        .post("/api/v1/evaluate", Some(&tenant.sdk_key), json!({"context": {"key": "u"}}))
+        .await
+        .expect(StatusCode::OK);
+    assert!(!decision.to_string().contains(&stored_salt), "{decision}");
+
+    // Neither does anything on the management API.
+    let flag = app
+        .get("/api/v1/projects/checkout/flags/checkout.v2", Some(&tenant.token))
+        .await
+        .expect(StatusCode::OK);
+    assert!(!flag.to_string().contains(&stored_salt), "{flag}");
+
+    let environments = app
+        .get("/api/v1/projects/checkout/environments", Some(&tenant.token))
+        .await
+        .expect(StatusCode::OK);
+    assert!(!environments.to_string().contains(&stored_salt), "{environments}");
 }
 
 #[sqlx::test(migrations = "../../migrations")]

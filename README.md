@@ -83,6 +83,7 @@ Three crates, with the dependency arrow pointing one way:
 | **`flagforge-storage`** | PostgreSQL persistence | Every query is verified against the real schema at compile time by `sqlx`. A column rename breaks the build, not production. |
 | **`flagforge-api`** | HTTP, auth, caching, OpenAPI | Exposed as a library too, so integration tests drive the *real* router over a *real* database. |
 | **`flagforge-web`** | The dashboard, Leptos → WASM | Reuses `flagforge-core`, so the rule editor validates and previews with the engine the server runs. Its own workspace, because it only ever targets `wasm32`. |
+| **`flagforge-sdk`** | The client a service embeds | Reuses `flagforge-core` again: it fetches configuration once and evaluates locally, so it cannot disagree with the server — it is not a reimplementation. |
 
 ---
 
@@ -91,13 +92,26 @@ Three crates, with the dependency arrow pointing one way:
 ```bash
 git clone https://github.com/your-user/flagforge && cd flagforge
 docker compose up --build
+
+# Fill it with a realistic organization so the dashboard has something in it
+docker compose exec api /app/flagforge seed
 ```
 
 That brings up Postgres and the API on `http://localhost:8080`, applying
-migrations on boot.
+migrations on boot. `seed` prints the sign-in details and an SDK key.
 
 - **Dashboard**: http://localhost:8080/
 - **Interactive API docs**: http://localhost:8080/docs
+
+<details>
+<summary>What the seed creates</summary>
+
+A project with production and staging, and six flags in the shapes a real
+project accumulates — a canary at 1 %, a gradual rollout with a rule for paid
+plans in front of it, a geo-targeted flag, an employees-only flag, a
+three-way multivariate experiment, and one already archived. Enough that every
+screen has something on it and every code path is exercised.
+</details>
 
 <details>
 <summary>Running it natively instead</summary>
@@ -220,7 +234,7 @@ WASM. The editor is not approximating what the server would do — it is calling
 | | |
 | --- | --- |
 | <img src="docs/screenshots/audit-log.png" alt="Audit log with an expanded before/after diff" /> | **Audit log** with a before/after diff on every change. |
-| <img src="docs/screenshots/sdk-keys.png" alt="SDK key creation showing the secret once" /> | **SDK keys**, with the secret shown exactly once — only its hash is stored. |
+| <img src="docs/screenshots/flag-rules.png" alt="A targeting rule being edited" /> | **Targeting rules** built from attribute, operator and values — seventeen operators, reordered by precedence. |
 | <img src="docs/screenshots/flags-dark.png" alt="The flag list in the dark theme" /> | **Light and dark**, chosen from the OS and then remembered. Set before first paint, so there is no flash. |
 
 Details that took the most care:
@@ -252,6 +266,83 @@ so `cargo build` at the repository root stays a native build and never drags a
 WASM toolchain into it. `trunk build --release` writes `crates/web/dist`, which
 the server build embeds; without it the binary still runs and simply reports
 that no dashboard is bundled.
+
+---
+
+## Using it from a service
+
+The dashboard is how you change a flag. This is how your code reads one:
+
+```toml
+flagforge-sdk = { git = "https://github.com/your-user/flagforge" }
+```
+
+```rust
+use flagforge_sdk::{Client, EvaluationContext};
+
+// Once, at start-up. `connect` fails fast on a bad key or URL, so a
+// misconfigured deploy stops here rather than serving fallbacks for a week.
+let flags = Client::builder("https://flags.example.com", &sdk_key).connect().await?;
+
+// Per request. No await: the answer is already in memory.
+let user = EvaluationContext::new(&user_id).with("plan", plan).with("country", country);
+
+if flags.is_enabled("checkout.v2", &user, false) {
+    render_new_checkout()
+}
+```
+
+It fetches the environment's configuration once, keeps it in memory, refreshes
+in the background, and answers locally by running `flagforge-core` — the same
+crate the server runs. That is the whole design: **the SDK is not a
+reimplementation of the engine, it is the engine.**
+
+Which means the property that matters is testable, so it is tested:
+
+```rust
+// crates/sdk/tests/agreement.rs — a real server on a real socket
+for i in 0..300 {
+    let local  = client.is_enabled("checkout.v2", &context(i), false);
+    let remote = fixture.evaluate_remotely("checkout.v2", &context(i)).await;
+    assert_eq!(local, remote, "user-{i} got {local} locally and {remote} from the server");
+}
+```
+
+### What it does when things go wrong
+
+A flag client sits in the request path of whatever embeds it, so its failure
+modes matter more than its features:
+
+| Situation | Behaviour |
+| --- | --- |
+| Unreachable at start-up | `connect` returns the error; `connect_lazy` boots anyway and serves your fallbacks |
+| A refresh fails | Keeps serving the last good configuration and logs a warning — stale flags beat a service that stops answering |
+| The key is rejected | Backs off to a slow retry rather than hammering, because a wrong key will not fix itself |
+| A flag does not exist | Returns the fallback from the call site |
+| Never loaded yet | Same: the fallback from the call site, and `is_ready()` says so for your readiness probe |
+
+Evaluation deliberately does not return a `Result`. A flag check that can fail
+is a flag check people wrap in `unwrap()`.
+
+### A design decision the SDK forced
+
+`/api/v1/snapshot` originally withheld the bucketing salt, and a test asserted
+it never appeared anywhere. That felt prudent and was wrong: without the salt an
+SDK matches targeting rules correctly but buckets percentage rollouts against a
+*different* salt than the server — so every answer looks plausible and roughly
+a quarter of them are wrong, with nothing to indicate it.
+
+The salt now ships to server-scoped keys, and only to them. It is not a
+weakening: a caller holding that response already has every targeting rule and
+could determine any user's assignment by asking `/evaluate` anyway. Withholding
+it protected nothing and broke the one thing it was in the way of. Client-scoped
+keys still get decisions only, and a test pins the boundary:
+
+```rust
+only_the_snapshot_response_carries_the_bucketing_salt   // in the OpenAPI document
+the_salt_reaches_server_keys_and_nothing_else           // over the wire
+a_client_scoped_key_cannot_drive_local_evaluation       // fails loudly at start-up
+```
 
 ---
 
@@ -430,30 +521,34 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**137 tests**, in three layers:
+**155 tests**, in four layers:
 
 - **Domain (49).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, and any full weight partition resolves.
-- **HTTP unit (56).** Error mapping, token round trips, tampering detection,
+- **HTTP unit (62).** Error mapping, token round trips, tampering detection,
   the rate limiter's refill maths, key generation, and OpenAPI generation
   (including a check that the domain and storage `Flag` types do not collide
   into one schema — utoipa keys schemas by type name).
-- **Integration (32).** `#[sqlx::test]` gives each test its own freshly
+- **Integration (33).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`.
+- **SDK (9).** Including the one that matters: a real server on a real socket,
+  and 300 users evaluated both locally and remotely to prove the two agree.
 
 The integration tests assert the things that would actually hurt:
 
 ```rust
 one_organization_cannot_see_or_touch_another
 an_sdk_key_only_reaches_its_own_environment
-the_snapshot_never_carries_the_bucketing_salt
+the_salt_reaches_server_keys_and_nothing_else
+local_and_remote_evaluation_agree_on_every_user
 a_stale_write_loses_to_the_one_that_got_there_first
 removing_a_variant_an_environment_still_serves_is_refused
 login_does_not_reveal_whether_an_account_exists
 a_percentage_rollout_is_sticky_and_lands_near_its_target
 a_revoked_sdk_key_stops_working_immediately
+two_unrelated_companies_may_share_a_name
 ```
 
 CI runs `cargo fmt --check`, `clippy -D warnings`, the full suite against a
@@ -519,9 +614,11 @@ flagforge/
 │   ├── storage/       # sqlx repositories, compile-time-checked SQL
 │   ├── api/           # axum handlers, auth, cache, OpenAPI
 │   │   └── tests/         # integration suite over a real Postgres
-│   └── web/           # Leptos dashboard -> WASM, own workspace
-│       ├── src/pages/     # login, projects, flags, keys, audit
-│       └── styles/        # handwritten design system, light + dark
+│   ├── web/           # Leptos dashboard -> WASM, own workspace
+│   │   ├── src/pages/     # login, projects, flags, keys, audit
+│   │   └── styles/        # handwritten design system, light + dark
+│   └── sdk/           # the client a service embeds
+│       └── tests/         # local decisions vs the server's, user by user
 ├── migrations/        # schema + NOTIFY triggers
 ├── .sqlx/             # offline query cache, so CI and Docker need no database
 └── .github/workflows/ # fmt · clippy · test · audit · docker

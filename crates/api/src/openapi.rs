@@ -58,6 +58,7 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects};
     ),
     components(schemas(
         crate::error::ProblemDetails,
+        crate::routes::evaluate::SnapshotResponse,
         flagforge_core::Flag,
         flagforge_core::Variant,
         flagforge_core::VariantValue,
@@ -174,11 +175,21 @@ mod tests {
         assert!(!stored.contains_key("rules"), "the stored record absorbed the domain schema");
     }
 
+    /// The salt is disclosed by exactly one endpoint. If it ever turns up in a
+    /// second schema, something started carrying it that should not.
     #[test]
-    fn the_document_never_mentions_a_bucketing_salt() {
-        // `EnvironmentSnapshot` is exposed to SDKs; the salt must not be part
-        // of its documented shape any more than of its serialized form.
-        let json = serde_json::to_string(&<ApiDoc as OpenApi>::openapi()).unwrap();
-        assert!(!json.contains("\"salt\""), "the OpenAPI document leaks the salt field");
+    fn only_the_snapshot_response_carries_the_bucketing_salt() {
+        let document = <ApiDoc as OpenApi>::openapi();
+        let json = serde_json::to_value(&document).unwrap();
+
+        let carriers: Vec<&str> = json["components"]["schemas"]
+            .as_object()
+            .expect("schemas")
+            .iter()
+            .filter(|(_, schema)| schema["properties"].get("salt").is_some())
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        assert_eq!(carriers, ["SnapshotResponse"], "unexpected schema carrying the salt");
     }
 }
