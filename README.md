@@ -5,7 +5,7 @@ bucketing, and an audit trail — with evaluation served from memory in **74 ns*
 ([measured](#how-fast-is-evaluation)), and a dashboard compiled to WebAssembly
 from the same codebase.
 
-[![CI](https://github.com/your-user/flagforge/actions/workflows/ci.yml/badge.svg)](https://github.com/your-user/flagforge/actions/workflows/ci.yml)
+[![CI](https://github.com/Ssebv/flagforge/actions/workflows/ci.yml/badge.svg)](https://github.com/Ssebv/flagforge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![No JavaScript build](https://img.shields.io/badge/frontend-Leptos%20%2F%20WASM-orange.svg)
@@ -93,7 +93,7 @@ Three crates, with the dependency arrow pointing one way:
 ## Quick start
 
 ```bash
-git clone https://github.com/your-user/flagforge && cd flagforge
+git clone https://github.com/Ssebv/flagforge && cd flagforge
 docker compose up --build
 
 # Fill it with a realistic organization so the dashboard has something in it
@@ -277,7 +277,7 @@ that no dashboard is bundled.
 The dashboard is how you change a flag. This is how your code reads one:
 
 ```toml
-flagforge-sdk = { git = "https://github.com/your-user/flagforge" }
+flagforge-sdk = { git = "https://github.com/Ssebv/flagforge" }
 ```
 
 ```rust
