@@ -87,10 +87,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `targets:` or `components:` here on purpose. rust-toolchain.toml
+      # pins the channel and overrides whatever this step installs, so anything
+      # named here would be added to a toolchain that never gets used. The pin
+      # file declares them instead.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:

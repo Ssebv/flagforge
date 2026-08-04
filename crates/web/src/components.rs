@@ -2,6 +2,7 @@
 
 use leptos::ev;
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::api::ApiError;
 use crate::toast::use_toaster;
@@ -105,8 +106,20 @@ pub fn Switch(
     }
 }
 
-/// A dialog. Closes on Escape and on a backdrop click, because a modal that
-/// can only be dismissed by finding the right button is a trap.
+/// Everything a keyboard can land on. Used to work out where a trapped Tab
+/// should wrap to.
+const FOCUSABLE: &str = concat!(
+    "a[href], button:not([disabled]), input:not([disabled]), ",
+    "select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+);
+
+/// A dialog.
+///
+/// Closes on Escape and on a backdrop click, because a modal that can only be
+/// dismissed by finding the right button is a trap. It is also a focus trap in
+/// the deliberate sense: `aria-modal` tells a screen reader that the rest of
+/// the page is inert, so if Tab can still reach the page behind it, the two
+/// disagree and a keyboard user ends up typing into a form they cannot see.
 #[component]
 pub fn Modal(
     #[prop(into)] title: String,
@@ -115,28 +128,78 @@ pub fn Modal(
 ) -> impl IntoView {
     let close = move || defer(move || on_close.run(()));
     let heading = title.clone();
+    let dialog = NodeRef::<leptos::html::Div>::new();
+    // Whatever had focus when the dialog opened, so it can be handed back.
+    let opener = StoredValue::new(None::<web_sys::HtmlElement>);
 
     let handle = window_event_listener(ev::keydown, move |event| {
         if event.key() == "Escape" {
             defer(move || on_close.run(()));
         }
     });
-    on_cleanup(move || handle.remove());
+
+    Effect::new(move |_| {
+        let Some(node) = dialog.get() else { return };
+
+        opener.set_value(
+            document()
+                .active_element()
+                .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok()),
+        );
+
+        // Focus the first control rather than the dialog itself: the point of
+        // opening a form is to type in it.
+        if let Some(first) = focusable_within(&node).first() {
+            let _ = first.focus();
+        }
+    });
+
+    on_cleanup(move || {
+        handle.remove();
+        // Returning focus is what makes a dialog feel like a detour rather
+        // than a dead end — without it, the next Tab starts from the top of
+        // the document.
+        if let Some(element) = opener.get_value() {
+            let _ = element.focus();
+        }
+    });
+
+    let trap = move |event: web_sys::KeyboardEvent| {
+        if event.key() != "Tab" {
+            return;
+        }
+        let Some(node) = dialog.get_untracked() else { return };
+        let focusable = focusable_within(&node);
+        let (Some(first), Some(last)) = (focusable.first(), focusable.last()) else {
+            return;
+        };
+
+        let active = document().active_element();
+        let at_edge = |edge: &web_sys::HtmlElement| {
+            active.as_ref().is_some_and(|element| element.is_same_node(Some(edge)))
+        };
+
+        if event.shift_key() && at_edge(first) {
+            event.prevent_default();
+            let _ = last.focus();
+        } else if !event.shift_key() && at_edge(last) {
+            event.prevent_default();
+            let _ = first.focus();
+        }
+    };
 
     view! {
-        <div
-            class="backdrop"
-            role="presentation"
-            on:click=move |_| close()
-        >
+        <div class="backdrop" role="presentation" on:click=move |_| close()>
             <div
                 class="modal"
                 role="dialog"
                 aria-modal="true"
                 aria-label=title
+                node_ref=dialog
                 // Without this, a click anywhere inside the dialog bubbles to
                 // the backdrop and closes it mid-edit.
                 on:click=|event| event.stop_propagation()
+                on:keydown=trap
             >
                 <div class="card__header">
                     <h2 class="card__title">{heading}</h2>
@@ -154,6 +217,21 @@ pub fn Modal(
             </div>
         </div>
     }
+}
+
+/// Focusable descendants in document order, skipping anything not rendered.
+fn focusable_within(root: &web_sys::HtmlElement) -> Vec<web_sys::HtmlElement> {
+    let Ok(nodes) = root.query_selector_all(FOCUSABLE) else {
+        return Vec::new();
+    };
+
+    (0..nodes.length())
+        .filter_map(|i| nodes.item(i))
+        .filter_map(|node| node.dyn_into::<web_sys::HtmlElement>().ok())
+        // `offset_parent` is None for anything `display: none`, which is the
+        // cheap way to skip controls inside a collapsed section.
+        .filter(|element| element.offset_parent().is_some())
+        .collect()
 }
 
 /// Shown when a list has no items yet.

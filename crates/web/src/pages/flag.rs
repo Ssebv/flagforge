@@ -496,6 +496,7 @@ fn RuleCard(
                     class="input"
                     style="border:0;background:transparent;padding:2px 4px;font-weight:540"
                     placeholder="Describe this rule…"
+                    aria-label=format!("Description for rule {}", index + 1)
                     disabled=move || !can_write.get()
                     prop:value=rule.description.clone().unwrap_or_default()
                     on:change=move |e| {
@@ -573,6 +574,7 @@ fn RuleCard(
                     <select
                         class="select"
                         style="max-width:200px"
+                        aria-label=format!("Variant served by rule {}", index + 1)
                         disabled=move || !can_write.get()
                         on:change=move |e| {
                             let variant = event_target_value(&e);
@@ -641,6 +643,7 @@ fn ConditionRow(
                 <input
                     class="input input--mono"
                     placeholder="attribute"
+                    aria-label="Context attribute"
                     disabled=move || !can_write.get()
                     prop:value=condition.attribute.clone()
                     on:change=move |e| {
@@ -652,6 +655,7 @@ fn ConditionRow(
 
             <select
                 class="select"
+                aria-label=format!("Comparison for `{}`", condition.attribute)
                 disabled=move || !can_write.get()
                 on:change=move |e| {
                     let raw = event_target_value(&e);
@@ -682,6 +686,7 @@ fn ConditionRow(
             <input
                 class="input"
                 placeholder="value, value, …"
+                aria-label=format!("Values compared against `{}`", condition.attribute)
                 disabled=move || !can_write.get() || !current_operator.takes_values()
                 prop:value=values_text
                 on:change=move |e| {
@@ -774,6 +779,7 @@ fn FallthroughEditor(
                             <select
                                 class="select"
                                 style="max-width:240px"
+                                aria-label="Variant served when no rule matches"
                                 disabled=move || !can_write.get()
                                 on:change=move |e| {
                                     let value = event_target_value(&e);

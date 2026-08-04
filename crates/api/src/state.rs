@@ -5,6 +5,7 @@ use std::sync::Arc;
 use flagforge_storage::PgPool;
 
 use crate::auth::jwt::TokenIssuer;
+use crate::auth::usage::UsageTracker;
 use crate::cache::SnapshotCache;
 use crate::config::Config;
 
@@ -15,6 +16,8 @@ pub struct AppState {
     pub pool: PgPool,
     pub cache: Arc<SnapshotCache>,
     pub tokens: TokenIssuer,
+    /// Keeps SDK-key usage bookkeeping off the evaluation path.
+    pub key_usage: Arc<UsageTracker>,
     pub config: Arc<Config>,
 }
 
@@ -25,6 +28,7 @@ impl AppState {
             cache: Arc::new(SnapshotCache::new(pool.clone())),
             pool,
             tokens,
+            key_usage: Arc::new(UsageTracker::default()),
             config: Arc::new(config),
         }
     }

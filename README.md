@@ -5,7 +5,7 @@ bucketing, and an audit trail — with evaluation served from memory in **74 ns*
 ([measured](#how-fast-is-evaluation)), and a dashboard compiled to WebAssembly
 from the same codebase.
 
-[![CI](https://github.com/your-user/flagforge/actions/workflows/ci.yml/badge.svg)](https://github.com/your-user/flagforge/actions/workflows/ci.yml)
+[![CI](https://github.com/Ssebv/flagforge/actions/workflows/ci.yml/badge.svg)](https://github.com/Ssebv/flagforge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![No JavaScript build](https://img.shields.io/badge/frontend-Leptos%20%2F%20WASM-orange.svg)
@@ -30,7 +30,10 @@ FlagForge is the service behind that question:
   same bucket on every node, forever, without any shared state.
 - **Per-environment configuration.** One flag, on in staging, at 5 % in
   production. Each environment has its own bucketing salt, so a canary in
-  staging does not preselect the same users in production.
+  staging does not preselect the same users in production. Every flag is
+  configured in every environment of its project, whichever was created first —
+  so a flag is never merely *absent* somewhere, which an SDK cannot tell apart
+  from "off".
 - **Multi-tenancy.** Organizations → projects → environments, isolated at the
   query level rather than by convention.
 - **Two credential types.** Short-lived JWTs for humans, long-lived scoped keys
@@ -90,7 +93,7 @@ Three crates, with the dependency arrow pointing one way:
 ## Quick start
 
 ```bash
-git clone https://github.com/your-user/flagforge && cd flagforge
+git clone https://github.com/Ssebv/flagforge && cd flagforge
 docker compose up --build
 
 # Fill it with a realistic organization so the dashboard has something in it
@@ -274,7 +277,7 @@ that no dashboard is bundled.
 The dashboard is how you change a flag. This is how your code reads one:
 
 ```toml
-flagforge-sdk = { git = "https://github.com/your-user/flagforge" }
+flagforge-sdk = { git = "https://github.com/Ssebv/flagforge" }
 ```
 
 ```rust
@@ -366,6 +369,17 @@ requests for an uncached environment issue *one* query rather than a hundred.
 failed refresh keeps serving the previous snapshot and logs a warning, because
 flags that suddenly stop resolving are far worse than flags that are a minute
 old.
+
+No *configuration* is read on that path, but one database call remains:
+authenticating the SDK key, a single indexed lookup by hash. It stays uncached
+deliberately — a revoked key stops working on the very next request rather than
+whenever a cache happens to expire, and that is worth one lookup.
+
+Recording *when* a key was last used used to cost a second call per request.
+The `UPDATE` only ever changes a row once a minute, yet it was issued on every
+evaluation to almost always match zero rows, so an in-process tracker now skips
+it in between: 500 evaluations cost one write instead of 500. The database
+predicate still has the final say, since each node throttles independently.
 
 ### How fast is evaluation
 
@@ -521,16 +535,16 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**155 tests**, in four layers:
+**160 tests**, in four layers:
 
 - **Domain (49).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, and any full weight partition resolves.
-- **HTTP unit (62).** Error mapping, token round trips, tampering detection,
-  the rate limiter's refill maths, key generation, and OpenAPI generation
-  (including a check that the domain and storage `Flag` types do not collide
-  into one schema — utoipa keys schemas by type name).
-- **Integration (33).** `#[sqlx::test]` gives each test its own freshly
+- **HTTP unit (67).** Error mapping, token round trips, tampering detection,
+  the rate limiter's refill maths, key generation, usage-write throttling, and
+  OpenAPI generation (including a check that the domain and storage `Flag`
+  types do not collide into one schema — utoipa keys schemas by type name).
+- **Integration (35).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`.
 - **SDK (9).** Including the one that matters: a real server on a real socket,
@@ -549,6 +563,7 @@ login_does_not_reveal_whether_an_account_exists
 a_percentage_rollout_is_sticky_and_lands_near_its_target
 a_revoked_sdk_key_stops_working_immediately
 two_unrelated_companies_may_share_a_name
+a_flag_defined_before_an_environment_is_still_configured_in_it
 ```
 
 CI runs `cargo fmt --check`, `clippy -D warnings`, the full suite against a
@@ -567,7 +582,7 @@ the Docker build (which has no database) breaks.
 | --- | --- |
 | `GET /health` | Liveness. Checks nothing else — a liveness probe that fails during a database outage just restarts every replica. |
 | `GET /health/ready` | Readiness. Round-trips a query and reports cached environments. |
-| `GET /metrics` | Prometheus: request rate and latency by *matched* route, evaluations by reason, cache hits/misses, login failures, rate limiting. |
+| `GET /metrics` | Prometheus: request rate and latency by *matched* route, evaluations by reason, cache hits/misses, SDK key usage writes, login failures, rate limiting. |
 | `GET /docs` | Swagger UI (non-production only). |
 | `GET /openapi.json` | The generated document. `cargo run --example dump_openapi` produces the same thing without booting anything, for client codegen in CI. |
 

@@ -1,0 +1,27 @@
+# cargo-audit configuration.
+#
+# Kept in the repository rather than passed as a CI flag, so a local
+# `cargo audit` and the pipeline reach the same verdict. An advisory that only
+# CI knows about is one nobody reads until it blocks a merge.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack: key recovery through a timing
+    # sidechannel in `rsa`. Medium severity, and there is still no fixed
+    # release to upgrade to.
+    #
+    # Not reachable here. FlagForge signs and verifies with HS256 alone: the
+    # only `Header::new` and `Validation::new` in the codebase name it, and
+    # pinning verification to HS256 also closes the algorithm-confusion route
+    # by which an RS256 token might otherwise be accepted. No RSA private-key
+    # operation is ever performed, which is what the attack needs.
+    #
+    # It cannot be removed either. `rsa` arrives through jsonwebtoken's
+    # `rust_crypto` feature, which bundles every algorithm's backend into one
+    # flag; the alternative is `aws_lc_rs`, deliberately rejected in the
+    # workspace manifest because it puts a C toolchain in the container build.
+    #
+    # Revisit when `rsa` ships a fix or jsonwebtoken lets its backends be
+    # selected individually.
+    "RUSTSEC-2023-0071",
+]
