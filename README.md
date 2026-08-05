@@ -26,6 +26,12 @@ FlagForge is the service behind that question:
 
 - **Targeting rules.** `plan in [pro, enterprise] AND seats >= 10` — seventeen
   operators including regex, semver and set membership.
+- **Reusable segments.** Name an audience once — *beta testers*, *EU accounts*
+  — and reference it from any number of flags, so widening it is one edit
+  instead of twelve. A segment is an include list, an exclude list and a set of
+  alternative rules, optionally narrowed to a deterministic share of whoever
+  matches. That cohort buckets on the *segment*, not the flag, so the same
+  people are in it wherever it is referenced.
 - **Percentage rollouts.** Deterministic and sticky: `user-42` lands in the
   same bucket on every node, forever, without any shared state.
 - **Per-environment configuration.** One flag, on in staging, at 5 % in
@@ -154,14 +160,29 @@ curl -s -X POST $BASE/api/v1/projects/checkout/environments -H "$AUTH" -H 'conte
 curl -s -X POST $BASE/api/v1/projects/checkout/flags -H "$AUTH" -H 'content-type: application/json' \
   -d '{"key":"checkout.v2","name":"New checkout"}'
 
-# 3. An SDK key. The secret is shown exactly once.
+# 3. A reusable audience: two named accounts, plus 20 % of enterprise traffic.
+curl -s -X POST $BASE/api/v1/projects/checkout/environments/production/segments \
+  -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"key":"beta-testers","name":"Beta testers"}'
+
+curl -s -X PUT $BASE/api/v1/projects/checkout/environments/production/segments/beta-testers \
+  -H "$AUTH" -H 'content-type: application/json' -d '{
+  "included": ["user-42", "user-7"],
+  "rules": [{
+    "id": "00000000-0000-0000-0000-000000000001",
+    "conditions": [{"attribute": "plan", "operator": "in", "values": ["enterprise"]}],
+    "rollout": {"percentage": 20000}
+  }]
+}'
+
+# 4. An SDK key. The secret is shown exactly once.
 SDK=$(curl -s -X POST $BASE/api/v1/projects/checkout/environments/production/keys \
   -H "$AUTH" -H 'content-type: application/json' \
   -d '{"name":"backend","scope":"server"}' | jq -r .secret)
 ```
 
-Now the interesting part — **ship to paying customers immediately, and to 20 %
-of everyone else**:
+Now the interesting part — **ship to the beta cohort immediately, to paying
+customers next, and to 20 % of everyone else**:
 
 ```bash
 curl -s -X PUT $BASE/api/v1/projects/checkout/environments/production/flags/checkout.v2 \
@@ -174,12 +195,20 @@ curl -s -X PUT $BASE/api/v1/projects/checkout/environments/production/flags/chec
   },
   "rules": [{
     "id": "11111111-1111-1111-1111-111111111111",
+    "description": "The beta cohort, whoever is in it today",
+    "segments": {"any_of": ["beta-testers"]},
+    "distribution": {"kind": "fixed", "variant": "on"}
+  }, {
+    "id": "22222222-2222-2222-2222-222222222222",
     "description": "Paid plans get it immediately",
     "conditions": [{"attribute": "plan", "operator": "in", "values": ["pro", "enterprise"]}],
     "distribution": {"kind": "fixed", "variant": "on"}
   }]
 }'
 ```
+
+Widening the beta cohort later is one `PUT` against the segment — every flag
+that references it moves with it, and none of them are touched.
 
 Evaluate as an SDK would:
 
@@ -238,6 +267,7 @@ WASM. The editor is not approximating what the server would do — it is calling
 | --- | --- |
 | <img src="docs/screenshots/audit-log.png" alt="Audit log with an expanded before/after diff" /> | **Audit log** with a before/after diff on every change. |
 | <img src="docs/screenshots/flag-rules.png" alt="A targeting rule being edited" /> | **Targeting rules** built from attribute, operator and values — seventeen operators, reordered by precedence. |
+| <img src="docs/screenshots/segments.png" alt="The segment editor, showing include and exclude lists, a membership rule and the flags that reference it" /> | **Segments**: an audience defined once, with the flags referencing it named on the same screen — so the blast radius of an edit is visible before you make it. |
 | <img src="docs/screenshots/flags-dark.png" alt="The flag list in the dark theme" /> | **Light and dark**, chosen from the OS and then remembered. Set before first paint, so there is no flash. |
 
 Details that took the most care:
@@ -388,15 +418,19 @@ Because a snapshot is already in memory, an evaluation is a pure function call.
 
 | Flag shape | Per evaluation | Throughput (single core) |
 | --- | ---: | ---: |
-| Off (kill switch) | 74 ns | 13.6 M/s |
-| On, no rules | 80 ns | 12.5 M/s |
-| Percentage rollout (SHA-256 bucketing) | 155 ns | 6.4 M/s |
-| 5 rules, the last one matches | 321 ns | 3.1 M/s |
-| 20 rules, none match (worst case) | 1.0 µs | 1.0 M/s |
+| Off (kill switch) | 66 ns | 15.2 M/s |
+| On, no rules | 40 ns | 24.8 M/s |
+| Percentage rollout (SHA-256 bucketing) | 114 ns | 8.8 M/s |
+| Rule gated on a segment | 115 ns | 8.7 M/s |
+| Segment cohort (a second hash) | 132 ns | 7.6 M/s |
+| 5 rules, the last one matches | 298 ns | 3.4 M/s |
+| 20 rules, none match (worst case) | 985 ns | 1.0 M/s |
 
 The numbers that matter are the last two: a flag with real targeting still
 costs well under a microsecond, so the HTTP layer and the network dominate the
-response long before the engine does. The bench is a plain example rather than
+response long before the engine does. Segments are close to free — resolving
+one is a map lookup and a second condition pass, and a segment *cohort* costs
+one extra SHA-256, the same as any rollout. The bench is a plain example rather than
 a criterion suite — enough to substantiate the claim and to notice a
 regression, not a statistical study.
 
@@ -535,19 +569,21 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**160 tests**, in four layers:
+**200 tests**, in four layers:
 
-- **Domain (49).** Pure unit tests plus `proptest` properties: buckets stay in
+- **Domain (72).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
-  unambiguous, and any full weight partition resolves.
-- **HTTP unit (67).** Error mapping, token round trips, tampering detection,
+  unambiguous, any full weight partition resolves, and a segment cohort cannot
+  alias the flag of the same name.
+- **HTTP unit (71).** Error mapping, token round trips, tampering detection,
   the rate limiter's refill maths, key generation, usage-write throttling, and
-  OpenAPI generation (including a check that the domain and storage `Flag`
-  types do not collide into one schema — utoipa keys schemas by type name).
-- **Integration (35).** `#[sqlx::test]` gives each test its own freshly
+  OpenAPI generation (including a check that the domain and storage `Flag` and
+  `Segment` types do not collide into one schema — utoipa keys schemas by type
+  name).
+- **Integration (46).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`.
-- **SDK (9).** Including the one that matters: a real server on a real socket,
+- **SDK (11).** Including the one that matters: a real server on a real socket,
   and 300 users evaluated both locally and remotely to prove the two agree.
 
 The integration tests assert the things that would actually hurt:
@@ -557,7 +593,10 @@ one_organization_cannot_see_or_touch_another
 an_sdk_key_only_reaches_its_own_environment
 the_salt_reaches_server_keys_and_nothing_else
 local_and_remote_evaluation_agree_on_every_user
+local_and_remote_agree_on_flags_gated_by_a_segment
 a_stale_write_loses_to_the_one_that_got_there_first
+editing_a_segment_moves_every_flag_that_references_it
+deleting_a_referenced_segment_is_refused_and_names_the_flags
 removing_a_variant_an_environment_still_serves_is_refused
 login_does_not_reveal_whether_an_account_exists
 a_percentage_rollout_is_sticky_and_lands_near_its_target
@@ -623,14 +662,15 @@ flagforge/
 ├── crates/
 │   ├── core/          # domain model + evaluation engine (no I/O)
 │   │   ├── bucket.rs      # deterministic hashing, + property tests
-│   │   ├── engine.rs      # evaluate(flag, context, salt)
-│   │   ├── matcher.rs     # targeting operators
+│   │   ├── engine.rs      # evaluate(flag, context, environment)
+│   │   ├── matcher.rs     # targeting operators, segment membership
+│   │   ├── segment.rs     # reusable audiences
 │   │   └── validate.rs    # what may never reach the database
 │   ├── storage/       # sqlx repositories, compile-time-checked SQL
 │   ├── api/           # axum handlers, auth, cache, OpenAPI
 │   │   └── tests/         # integration suite over a real Postgres
 │   ├── web/           # Leptos dashboard -> WASM, own workspace
-│   │   ├── src/pages/     # login, projects, flags, keys, audit
+│   │   ├── src/pages/     # login, projects, flags, segments, keys, audit
 │   │   └── styles/        # handwritten design system, light + dark
 │   └── sdk/           # the client a service embeds
 │       └── tests/         # local decisions vs the server's, user by user
