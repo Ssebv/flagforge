@@ -23,8 +23,11 @@ primary_region = "cdg"
 # The runtime image is distroless — no shell — so there is no `fly ssh console`
 # to seed by hand; it has to happen here. `--if-empty` is what makes that safe
 # to run on every deploy rather than only the first.
+# Arguments only, no binary path: Fly appends this to the image's ENTRYPOINT,
+# so naming the binary here makes it `/app/flagforge /app/flagforge seed`, and
+# the first argument is parsed as a subcommand. That fails the whole deploy.
 [deploy]
-  release_command = "/app/flagforge seed --if-empty"
+  release_command = "seed --if-empty"
 
 [env]
   APP_ENV = "production"

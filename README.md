@@ -659,8 +659,11 @@ once, so a misconfigured deploy needs one restart rather than five. A
 
 ```toml
 [deploy]
-  release_command = "/app/flagforge seed --if-empty"
+  release_command = "seed --if-empty"
 ```
+
+(Arguments only — Fly appends them to the image's `ENTRYPOINT`, so naming the
+binary again would make it `flagforge flagforge seed`.)
 
 That is not a convenience. The runtime image is distroless, so there is no
 shell to `fly ssh console` into and no way to seed a deployed instance
