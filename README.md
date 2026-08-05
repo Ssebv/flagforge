@@ -14,6 +14,11 @@ from the same codebase.
 with `read-only-demo-account`. Read-only on purpose: the account can see
 production exactly as an operator does and cannot change a thing.
 
+To *edit* something, register your own organization from the same screen. It is
+a multi-tenant service isolated at the query level, so your flags and the demo's
+never see each other — which is the honest way to let a stranger try the rule
+editor without handing them the demo.
+
 ![The flag list](docs/screenshots/flags-light.png)
 
 *One binary: API, migrations and dashboard. No Node anywhere in the build.*
