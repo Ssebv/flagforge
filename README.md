@@ -584,18 +584,18 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**208 tests**, in four layers:
+**217 tests**, in four layers:
 
 - **Domain (72).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, any full weight partition resolves, and a segment cohort cannot
   alias the flag of the same name.
-- **HTTP unit (71).** Error mapping, token round trips, tampering detection,
+- **HTTP unit (77).** Error mapping, token round trips, tampering detection,
   the rate limiter's refill maths, key generation, usage-write throttling, and
   OpenAPI generation (including a check that the domain and storage `Flag` and
   `Segment` types do not collide into one schema — utoipa keys schemas by type
   name).
-- **Integration (54).** `#[sqlx::test]` gives each test its own freshly
+- **Integration (58).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`. Includes the ones a
   public deployment rests on: that the seed is a no-op the second time, and
@@ -669,6 +669,12 @@ Configuration is entirely environment variables (see [`.env.example`](.env.examp
 the server validates all of them at startup and reports *every* problem at
 once, so a misconfigured deploy needs one restart rather than five. A
 `JWT_SECRET` shorter than 32 characters is a refusal to boot, not a warning.
+
+Set **`METRICS_TOKEN`** on anything reachable from the internet. `/metrics` is
+the only route with no authentication, which is right on a laptop and wrong in
+public; with the variable set it wants `Authorization: Bearer <token>`, compared
+in constant time. It is opt-in rather than mandatory because a scraper that
+suddenly needs a credential is an outage of its own.
 
 **Seeding happens in the release command**, not by hand:
 

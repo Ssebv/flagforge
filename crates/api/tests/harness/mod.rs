@@ -50,6 +50,12 @@ impl Response {
 
 impl TestApp {
     pub fn new(pool: PgPool) -> Self {
+        Self::with_metrics_token(pool, None)
+    }
+
+    /// An app whose `/metrics` demands a bearer token.
+    pub fn with_metrics_token(pool: PgPool, metrics_token: Option<&str>) -> Self {
+        let metrics_token = metrics_token.map(str::to_owned);
         let config = Config {
             server: ServerConfig {
                 address: SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -67,6 +73,7 @@ impl TestApp {
             auth: AuthConfig {
                 jwt_secret: "test-secret-long-enough-to-pass-validation".into(),
                 token_ttl: Duration::from_secs(3600),
+                metrics_token,
             },
             cache: CacheConfig { refresh_interval: Duration::from_secs(60) },
             // Generous, so a test that makes many calls is not throttled; the

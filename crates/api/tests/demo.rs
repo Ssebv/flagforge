@@ -175,3 +175,38 @@ async fn an_explicit_password_is_used_even_in_production(pool: PgPool) {
     let app = TestApp::new(pool);
     sign_in(&app, "ada@acme.test", chosen).await;
 }
+
+// ------------------------------------------------------------- /metrics --
+
+/// `/metrics` is the one route with no authentication, which is right on a
+/// laptop and wrong on the public internet.
+#[sqlx::test(migrations = "../../migrations")]
+async fn metrics_stay_open_when_no_token_is_configured(pool: PgPool) {
+    let app = TestApp::new(pool);
+    app.get("/metrics", None).await.expect(StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_configured_metrics_token_closes_the_endpoint(pool: PgPool) {
+    let app = TestApp::with_metrics_token(pool, Some("scrape-me"));
+
+    let anonymous = app.get("/metrics", None).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED, "body was {}", anonymous.body);
+
+    let wrong = app.get("/metrics", Some("nope")).await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "body was {}", wrong.body);
+
+    app.get("/metrics", Some("scrape-me")).await.expect(StatusCode::OK);
+}
+
+/// A user's JWT must not double as a scrape credential, and vice versa — they
+/// are separate secrets with separate lifetimes.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_user_token_does_not_open_metrics(pool: PgPool) {
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development).await.unwrap();
+    let app = TestApp::with_metrics_token(pool, Some("scrape-me"));
+    let token = sign_in(&app, VIEWER.0, VIEWER.1).await;
+
+    let refused = app.get("/metrics", Some(&token)).await;
+    assert_eq!(refused.status, StatusCode::UNAUTHORIZED, "body was {}", refused.body);
+}

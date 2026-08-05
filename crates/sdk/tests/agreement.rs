@@ -31,6 +31,7 @@ async fn serve(pool: PgPool) -> SocketAddr {
         auth: AuthConfig {
             jwt_secret: "test-secret-long-enough-to-pass-validation".into(),
             token_ttl: Duration::from_secs(3600),
+            metrics_token: None,
         },
         cache: CacheConfig { refresh_interval: Duration::from_secs(60) },
         rate_limit: RateLimitConfig { burst: 100_000, per_second: 100_000 },

@@ -55,18 +55,28 @@ pub struct ServerConfig {
     pub shutdown_grace: Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DatabaseConfig {
+    /// Carries the password, so this struct redacts itself — see the `Debug`
+    /// impl below.
     pub url: String,
     pub max_connections: u32,
     /// Whether to run pending migrations on boot.
     pub auto_migrate: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthConfig {
     pub jwt_secret: String,
     pub token_ttl: Duration,
+    /// Bearer token `/metrics` requires, if any.
+    ///
+    /// Unset leaves the endpoint open, which is right on a laptop and wrong on
+    /// the public internet: it is the one route with no authentication at all.
+    /// Opt-in rather than mandatory because a scraper that suddenly needs a
+    /// credential is an outage, and because the exposure is real but small —
+    /// method, path and status, with no tenant data in any label.
+    pub metrics_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +92,45 @@ pub struct RateLimitConfig {
     pub burst: u32,
     /// Sustained requests per second per client.
     pub per_second: u32,
+}
+
+/// Secrets are redacted from `Debug` rather than trusted not to be printed.
+///
+/// Nothing logs the configuration today. But `derive(Debug)` on a struct
+/// holding a JWT signing key, a scrape token and a database URL with a
+/// password in it means one future `tracing::error!(?config)` — the most
+/// natural thing in the world to write while debugging a boot failure — puts
+/// all three in the log. The same reasoning already applies to internal error
+/// bodies, which never carry their cause for exactly this reason.
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("jwt_secret", &"[redacted]")
+            .field("token_ttl", &self.token_ttl)
+            .field("metrics_token", &self.metrics_token.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("url", &redact_url(&self.url))
+            .field("max_connections", &self.max_connections)
+            .field("auto_migrate", &self.auto_migrate)
+            .finish()
+    }
+}
+
+/// Keeps the host and database — the parts that make a log useful — and drops
+/// the credentials. Anything unparseable is redacted whole rather than guessed
+/// at, because a URL we do not understand is the one most likely to surprise us.
+fn redact_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return "[redacted]".to_owned() };
+    match rest.rsplit_once('@') {
+        Some((_credentials, host)) => format!("{scheme}://[redacted]@{host}"),
+        None => url.to_owned(),
+    }
 }
 
 impl Config {
@@ -115,6 +164,11 @@ impl Config {
         let auto_migrate = parsed("AUTO_MIGRATE", true, &mut errors);
         let token_ttl = seconds("TOKEN_TTL_SECS", 12 * 3600, &mut errors);
         let refresh_interval = seconds("CACHE_REFRESH_SECS", 60, &mut errors);
+        let metrics_token = std::env::var("METRICS_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+
         let burst = parsed("RATE_LIMIT_BURST", 120u32, &mut errors);
         let per_second = parsed("RATE_LIMIT_PER_SECOND", 40u32, &mut errors);
 
@@ -146,7 +200,11 @@ impl Config {
                 max_connections,
                 auto_migrate,
             },
-            auth: AuthConfig { jwt_secret: jwt_secret.expect("checked above"), token_ttl },
+            auth: AuthConfig {
+                jwt_secret: jwt_secret.expect("checked above"),
+                token_ttl,
+                metrics_token,
+            },
             cache: CacheConfig { refresh_interval },
             rate_limit: RateLimitConfig { burst, per_second },
             environment,
@@ -187,6 +245,46 @@ fn seconds(name: &'static str, default: u64, errors: &mut Vec<ConfigError>) -> D
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn debug_output_never_carries_a_secret() {
+        let auth = AuthConfig {
+            jwt_secret: "a-signing-key-nobody-should-ever-see".into(),
+            token_ttl: Duration::from_secs(3600),
+            metrics_token: Some("a-scrape-token".into()),
+        };
+        let printed = format!("{auth:?}");
+
+        assert!(!printed.contains("a-signing-key-nobody-should-ever-see"), "{printed}");
+        assert!(!printed.contains("a-scrape-token"), "{printed}");
+        // Whether a token is configured at all is not the secret, and knowing
+        // it is what makes the line worth logging.
+        assert!(printed.contains("Some"), "{printed}");
+
+        let absent = AuthConfig { metrics_token: None, ..auth };
+        assert!(format!("{absent:?}").contains("None"));
+    }
+
+    #[test]
+    fn a_database_url_keeps_its_host_and_loses_its_password() {
+        let database = DatabaseConfig {
+            url: "postgres://flagforge:hunter2@db.internal:5432/flagforge".into(),
+            max_connections: 20,
+            auto_migrate: true,
+        };
+        let printed = format!("{database:?}");
+
+        assert!(!printed.contains("hunter2"), "{printed}");
+        assert!(printed.contains("db.internal:5432/flagforge"), "{printed}");
+    }
+
+    #[test]
+    fn redaction_handles_urls_without_credentials_or_shape() {
+        assert_eq!(redact_url("postgres://db.internal:5432/x"), "postgres://db.internal:5432/x");
+        assert_eq!(redact_url("not a url at all"), "[redacted]");
+        // An `@` in the password must not fool the split into keeping it.
+        assert_eq!(redact_url("postgres://u:p@ss@db/x"), "postgres://[redacted]@db/x");
+    }
     use super::*;
 
     #[test]
