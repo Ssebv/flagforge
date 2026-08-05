@@ -10,6 +10,10 @@ from the same codebase.
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![No JavaScript build](https://img.shields.io/badge/frontend-Leptos%20%2F%20WASM-orange.svg)
 
+**[Live demo →](https://flagforge.fly.dev)** — sign in as `viewer@acme.test`
+with `read-only-demo-account`. Read-only on purpose: the account can see
+production exactly as an operator does and cannot change a thing.
+
 ![The flag list](docs/screenshots/flags-light.png)
 
 *One binary: API, migrations and dashboard. No Node anywhere in the build.*
