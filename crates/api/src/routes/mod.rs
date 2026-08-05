@@ -50,9 +50,16 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
             "/metrics",
             get({
                 let handle = Arc::new(metrics);
-                move || {
+                let expected = state.config.auth.metrics_token.clone();
+                move |headers: axum::http::HeaderMap| {
                     let handle = Arc::clone(&handle);
-                    async move { handle.render() }
+                    let expected = expected.clone();
+                    async move {
+                        match metrics_allowed(expected.as_deref(), &headers) {
+                            true => Ok(handle.render()),
+                            false => Err(ApiError::Unauthorized("a metrics token is required")),
+                        }
+                    }
                 }
             }),
         );
@@ -196,6 +203,31 @@ impl MakeRequestId for MakeRequestUuid {
     }
 }
 
+/// Whether a `/metrics` request may proceed.
+///
+/// With no token configured the endpoint is open, which is what a laptop and a
+/// private network want. With one, the comparison is constant-time: the token
+/// is a secret, and an endpoint that leaks its length or prefix through timing
+/// is a worse bug than the one this closes.
+fn metrics_allowed(expected: Option<&str>, headers: &axum::http::HeaderMap) -> bool {
+    let Some(expected) = expected else { return true };
+
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default();
+
+    constant_time_eq(presented.as_bytes(), expected.as_bytes())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Rejects identifiers the database would reject anyway, with a message that
 /// names the field instead of a constraint.
 pub(crate) fn valid_key(candidate: &str, field: &'static str) -> Result<(), ApiError> {
@@ -224,6 +256,44 @@ pub fn new_salt() -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    fn bearer(token: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers
+            .insert(axum::http::header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn metrics_are_open_when_no_token_is_configured() {
+        assert!(metrics_allowed(None, &axum::http::HeaderMap::new()));
+        assert!(metrics_allowed(None, &bearer("anything")));
+    }
+
+    #[test]
+    fn a_configured_metrics_token_is_required_and_must_match() {
+        let expected = Some("s3cret-scrape-token");
+
+        assert!(metrics_allowed(expected, &bearer("s3cret-scrape-token")));
+
+        assert!(!metrics_allowed(expected, &axum::http::HeaderMap::new()));
+        assert!(!metrics_allowed(expected, &bearer("wrong")));
+        // A correct prefix must not pass: this is the case a naive
+        // `starts_with` would wave through.
+        assert!(!metrics_allowed(expected, &bearer("s3cret")));
+        // Nor may the scheme be dropped.
+        let mut raw = axum::http::HeaderMap::new();
+        raw.insert(axum::http::header::AUTHORIZATION, "s3cret-scrape-token".parse().unwrap());
+        assert!(!metrics_allowed(expected, &raw));
+    }
+
+    #[test]
+    fn the_comparison_does_not_short_circuit_on_length() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(constant_time_eq(b"", b""));
+    }
 
     #[test]
     fn keys_are_validated_the_same_way_the_database_would() {

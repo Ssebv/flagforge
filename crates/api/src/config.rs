@@ -67,6 +67,14 @@ pub struct DatabaseConfig {
 pub struct AuthConfig {
     pub jwt_secret: String,
     pub token_ttl: Duration,
+    /// Bearer token `/metrics` requires, if any.
+    ///
+    /// Unset leaves the endpoint open, which is right on a laptop and wrong on
+    /// the public internet: it is the one route with no authentication at all.
+    /// Opt-in rather than mandatory because a scraper that suddenly needs a
+    /// credential is an outage, and because the exposure is real but small —
+    /// method, path and status, with no tenant data in any label.
+    pub metrics_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +123,11 @@ impl Config {
         let auto_migrate = parsed("AUTO_MIGRATE", true, &mut errors);
         let token_ttl = seconds("TOKEN_TTL_SECS", 12 * 3600, &mut errors);
         let refresh_interval = seconds("CACHE_REFRESH_SECS", 60, &mut errors);
+        let metrics_token = std::env::var("METRICS_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+
         let burst = parsed("RATE_LIMIT_BURST", 120u32, &mut errors);
         let per_second = parsed("RATE_LIMIT_PER_SECOND", 40u32, &mut errors);
 
@@ -146,7 +159,11 @@ impl Config {
                 max_connections,
                 auto_migrate,
             },
-            auth: AuthConfig { jwt_secret: jwt_secret.expect("checked above"), token_ttl },
+            auth: AuthConfig {
+                jwt_secret: jwt_secret.expect("checked above"),
+                token_ttl,
+                metrics_token,
+            },
             cache: CacheConfig { refresh_interval },
             rate_limit: RateLimitConfig { burst, per_second },
             environment,
