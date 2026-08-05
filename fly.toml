@@ -42,9 +42,12 @@ primary_region = "cdg"
   force_https = true
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  # At least one machine stays up: a cold start would add seconds to an
-  # evaluation call that is supposed to take milliseconds.
-  min_machines_running = 1
+  # Zero, because this deployment is a demo: the visitor is a person opening a
+  # link, not an SDK evaluating in a hot loop, and `suspend` resumes from a
+  # memory snapshot rather than booting cold. A real production deployment
+  # should raise this to 1 — there, keeping a machine warm is worth it precisely
+  # because an evaluation is supposed to take milliseconds.
+  min_machines_running = 0
 
   [http_service.concurrency]
     type = "requests"
