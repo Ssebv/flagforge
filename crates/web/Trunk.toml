@@ -5,6 +5,15 @@ dist = "dist"
 # `/` or opened from a subdirectory during development.
 public_url = "/"
 
+# Trunk empties `dist` on every build, which deletes the tracked `.gitkeep`
+# that lets a fresh clone compile without the WASM toolchain — `rust-embed`
+# needs the directory to exist. Putting it back here rather than trusting
+# whoever runs the build to notice: this has broken CI twice.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["-c", "touch $TRUNK_STAGING_DIR/.gitkeep"]
+
 [watch]
 watch = ["src", "index.html", "styles"]
 
