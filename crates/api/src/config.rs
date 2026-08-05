@@ -63,6 +63,9 @@ pub struct DatabaseConfig {
     pub max_connections: u32,
     /// Whether to run pending migrations on boot.
     pub auto_migrate: bool,
+    /// How long to wait for a database that is still coming up before giving
+    /// up at startup.
+    pub startup_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -118,6 +121,7 @@ impl std::fmt::Debug for DatabaseConfig {
             .field("url", &redact_url(&self.url))
             .field("max_connections", &self.max_connections)
             .field("auto_migrate", &self.auto_migrate)
+            .field("startup_timeout", &self.startup_timeout)
             .finish()
     }
 }
@@ -162,6 +166,7 @@ impl Config {
         let body_limit = parsed("BODY_LIMIT_BYTES", 256 * 1024usize, &mut errors);
         let max_connections = parsed("DATABASE_MAX_CONNECTIONS", 20u32, &mut errors);
         let auto_migrate = parsed("AUTO_MIGRATE", true, &mut errors);
+        let db_startup_timeout = seconds("DATABASE_STARTUP_TIMEOUT_SECS", 30, &mut errors);
         let token_ttl = seconds("TOKEN_TTL_SECS", 12 * 3600, &mut errors);
         let refresh_interval = seconds("CACHE_REFRESH_SECS", 60, &mut errors);
         let metrics_token = std::env::var("METRICS_TOKEN")
@@ -199,6 +204,7 @@ impl Config {
                 url: database_url.expect("checked above"),
                 max_connections,
                 auto_migrate,
+                startup_timeout: db_startup_timeout,
             },
             auth: AuthConfig {
                 jwt_secret: jwt_secret.expect("checked above"),
@@ -271,6 +277,7 @@ mod tests {
             url: "postgres://flagforge:hunter2@db.internal:5432/flagforge".into(),
             max_connections: 20,
             auto_migrate: true,
+            startup_timeout: Duration::from_secs(30),
         };
         let printed = format!("{database:?}");
 

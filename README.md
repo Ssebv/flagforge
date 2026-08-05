@@ -584,9 +584,9 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**217 tests**, in four layers:
+**219 tests**, in four layers:
 
-- **Domain (72).** Pure unit tests plus `proptest` properties: buckets stay in
+- **Domain (74).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, any full weight partition resolves, and a segment cohort cannot
   alias the flag of the same name.
