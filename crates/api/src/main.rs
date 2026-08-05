@@ -37,6 +37,7 @@ fn parse_command() -> anyhow::Result<Command> {
                     "--password" => {
                         credentials.password = args.next().context("--password needs a value")?;
                     }
+                    "--if-empty" => credentials.if_empty = true,
                     other => anyhow::bail!("unknown option `{other}` for `seed`"),
                 }
             }
@@ -60,6 +61,8 @@ USAGE:
 SEED OPTIONS:
     --email <EMAIL>                   Owner address    [default: ada@acme.test]
     --password <PASSWORD>             Owner password   [default: correct-horse-battery-staple]
+    --if-empty                        Succeed quietly if the database already has
+                                      that owner, so this can run on every deploy
 
 Configuration is read from the environment; see .env.example.";
 

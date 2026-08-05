@@ -61,6 +61,45 @@ pub async fn create_organization_with_owner(
     ))
 }
 
+/// Adds a user to an organization that already exists.
+///
+/// Separate from [`create_organization_with_owner`], which is the *registration*
+/// path and hard-codes `owner` precisely so that signing up cannot mint any
+/// other role. This one takes the role explicitly and is for adding people to a
+/// tenant that already has one.
+pub async fn create_user(
+    pool: &PgPool,
+    organization_id: Uuid,
+    email: &str,
+    password_hash: &str,
+    role: Role,
+) -> Result<User> {
+    let email = email.trim().to_lowercase();
+
+    let row = sqlx::query!(
+        r#"
+        INSERT INTO users (organization_id, email, password_hash, role)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, organization_id, email, role, created_at
+        "#,
+        organization_id,
+        email,
+        password_hash,
+        role.as_str(),
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| StorageError::from_write(e, "user", &email))?;
+
+    Ok(User {
+        id: row.id,
+        organization_id: row.organization_id,
+        email: row.email,
+        role: Role::parse(&row.role).unwrap_or(Role::Viewer),
+        created_at: row.created_at,
+    })
+}
+
 /// Looks a user up for login. Returns the password hash, so callers must not
 /// leak the result into a response.
 pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<UserWithSecret>> {
