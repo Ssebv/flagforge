@@ -26,6 +26,12 @@ pub enum StorageError {
     #[error("{entity} failed a database constraint")]
     Invalid { entity: &'static str },
 
+    /// A delete refused because something still points at the row. Postgres
+    /// cannot enforce this one: the reference lives inside a JSONB rule, not in
+    /// a column a foreign key could cover.
+    #[error("{entity} `{key}` is still referenced by {}", referenced_by.join(", "))]
+    InUse { entity: &'static str, key: String, referenced_by: Vec<String> },
+
     /// A row we wrote no longer deserializes into the domain model. This means
     /// a schema/model skew, not a user error, so it is never a 4xx.
     #[error("stored {entity} is malformed: {source}")]

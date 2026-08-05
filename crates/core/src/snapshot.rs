@@ -1,9 +1,10 @@
 //! An immutable, self-contained view of one environment.
 //!
 //! Snapshots are what the API keeps in memory and hands to the evaluation
-//! endpoint. Because a snapshot carries everything evaluation needs — flags
-//! *and* the environment salt — serving a decision touches no database, and a
-//! Postgres outage degrades to "flags are stale", not "flags are down".
+//! endpoint. Because a snapshot carries everything evaluation needs — the
+//! flags, the segments their rules reference, and the environment salt —
+//! serving a decision touches no database, and a Postgres outage degrades to
+//! "flags are stale", not "flags are down".
 
 use std::collections::BTreeMap;
 
@@ -12,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::context::EvaluationContext;
-use crate::engine::{Evaluation, evaluate};
+use crate::engine::{Evaluation, EvaluationEnv, evaluate};
 use crate::flag::Flag;
+use crate::segment::{Segment, SegmentSet};
 use crate::value::VariantValue;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,7 +29,14 @@ pub struct EnvironmentSnapshot {
     pub salt: String,
     /// Ordered so `evaluate_all` returns a stable sequence.
     pub flags: BTreeMap<String, Flag>,
-    /// Highest `version` across the flags, used as an ETag-style cache token.
+    /// The audiences the flags' rules reference. They travel with the flags
+    /// because a rule that names one cannot be evaluated without it — an SDK
+    /// holding flags but no segments would quietly stop matching.
+    #[serde(default)]
+    pub segments: SegmentSet,
+    /// Highest `version` across flags *and* segments, used as an ETag-style
+    /// cache token. Segments count because editing one changes what every flag
+    /// referencing it serves, without touching any flag's own version.
     pub version: i64,
     pub generated_at: DateTime<Utc>,
 }
@@ -38,16 +47,25 @@ impl EnvironmentSnapshot {
         environment_key: impl Into<String>,
         salt: impl Into<String>,
         flags: impl IntoIterator<Item = Flag>,
+        segments: impl IntoIterator<Item = Segment>,
         generated_at: DateTime<Utc>,
     ) -> Self {
         let flags: BTreeMap<String, Flag> = flags.into_iter().map(|f| (f.key.clone(), f)).collect();
-        let version = flags.values().map(|f| f.version).max().unwrap_or(0);
+        let segments: SegmentSet = segments.into_iter().map(|s| (s.key.clone(), s)).collect();
+
+        let version = flags
+            .values()
+            .map(|f| f.version)
+            .chain(segments.values().map(|s| s.version))
+            .max()
+            .unwrap_or(0);
 
         Self {
             environment_id,
             environment_key: environment_key.into(),
             salt: salt.into(),
             flags,
+            segments,
             version,
             generated_at,
         }
@@ -55,6 +73,15 @@ impl EnvironmentSnapshot {
 
     pub fn get(&self, flag_key: &str) -> Option<&Flag> {
         self.flags.get(flag_key)
+    }
+
+    pub fn segment(&self, segment_key: &str) -> Option<&Segment> {
+        self.segments.get(segment_key)
+    }
+
+    /// The environment half of an evaluation, ready to hand to [`evaluate`].
+    pub fn env(&self) -> EvaluationEnv<'_> {
+        EvaluationEnv::with_segments(&self.salt, &self.segments)
     }
 
     pub fn len(&self) -> usize {
@@ -74,7 +101,7 @@ impl EnvironmentSnapshot {
         fallback: VariantValue,
     ) -> Evaluation {
         match self.get(flag_key) {
-            Some(flag) => evaluate(flag, ctx, &self.salt),
+            Some(flag) => evaluate(flag, ctx, &self.env()),
             None => Evaluation::not_found(flag_key, fallback),
         }
     }
@@ -82,7 +109,8 @@ impl EnvironmentSnapshot {
     /// Evaluates every flag in the environment — the call an SDK makes once at
     /// startup so it can answer locally afterwards.
     pub fn evaluate_all(&self, ctx: &EvaluationContext) -> Vec<Evaluation> {
-        self.flags.values().map(|flag| evaluate(flag, ctx, &self.salt)).collect()
+        let env = self.env();
+        self.flags.values().map(|flag| evaluate(flag, ctx, &env)).collect()
     }
 }
 
@@ -93,7 +121,7 @@ mod tests {
     use crate::flag::Distribution;
 
     fn snapshot(flags: Vec<Flag>) -> EnvironmentSnapshot {
-        EnvironmentSnapshot::new(Uuid::nil(), "production", "salt", flags, Utc::now())
+        EnvironmentSnapshot::new(Uuid::nil(), "production", "salt", flags, [], Utc::now())
     }
 
     #[test]
@@ -124,6 +152,56 @@ mod tests {
         assert_eq!(out.iter().map(|e| e.flag_key.as_str()).collect::<Vec<_>>(), ["alpha", "zeta"]);
         assert!(!out[0].is_on());
         assert!(out[1].is_on());
+    }
+
+    /// A segment edit has to move the snapshot version even when no flag was
+    /// touched, or every cache keyed on that version would keep serving the
+    /// audience the segment used to have.
+    #[test]
+    fn version_covers_segments_too() {
+        let snap = EnvironmentSnapshot::new(
+            Uuid::nil(),
+            "production",
+            "salt",
+            vec![Flag { version: 3, ..Flag::boolean("a") }],
+            vec![Segment { version: 11, ..Segment::new("beta") }],
+            Utc::now(),
+        );
+        assert_eq!(snap.version, 11);
+        assert!(snap.segment("beta").is_some());
+    }
+
+    #[test]
+    fn a_rule_resolves_its_segment_through_the_snapshot() {
+        use crate::flag::{Condition, Operator, Rule};
+        use crate::segment::{SegmentMatch, SegmentRule};
+        use uuid::Uuid as U;
+
+        let beta = Segment::new("beta").with_rules(vec![SegmentRule::new(
+            U::nil(),
+            vec![Condition::new("plan", Operator::In, vec!["pro".into()])],
+        )]);
+
+        let flag = Flag::boolean("f").enabled(true).with_rules(vec![
+            Rule::new(U::from_u128(7), vec![], Distribution::fixed("on"))
+                .targeting(SegmentMatch::any_of(["beta"])),
+        ]);
+        let flag = Flag { fallthrough: Distribution::fixed("off"), ..flag };
+
+        let snap = EnvironmentSnapshot::new(
+            Uuid::nil(),
+            "production",
+            "salt",
+            vec![flag],
+            vec![beta],
+            Utc::now(),
+        );
+
+        let pro = EvaluationContext::new("u").with("plan", "pro");
+        assert!(snap.evaluate("f", &pro, VariantValue::Bool(false)).is_on());
+
+        let free = EvaluationContext::new("u").with("plan", "free");
+        assert!(!snap.evaluate("f", &free, VariantValue::Bool(false)).is_on());
     }
 
     #[test]

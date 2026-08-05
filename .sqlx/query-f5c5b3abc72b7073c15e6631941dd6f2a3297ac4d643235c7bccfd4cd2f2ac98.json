@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM segments WHERE environment_id = $1 AND key = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5c5b3abc72b7073c15e6631941dd6f2a3297ac4d643235c7bccfd4cd2f2ac98"
+}

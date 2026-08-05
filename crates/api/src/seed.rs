@@ -9,15 +9,21 @@
 //! Deliberately not run automatically at start-up: creating accounts in
 //! someone's database because they booted a binary would be a surprise.
 
+use std::collections::BTreeSet;
+
 use flagforge_core::{
-    AttributeValue, Condition, Distribution, Operator, Rule, TOTAL_WEIGHT, Variant, WeightedVariant,
+    AttributeValue, Condition, Distribution, Operator, Rule, SegmentMatch, SegmentRollout,
+    SegmentRule, TOTAL_WEIGHT, Variant, WeightedVariant,
 };
 use flagforge_storage::models::{KeyScope, NewAuditEntry};
-use flagforge_storage::{PgPool, accounts, api_keys, audit, flags, projects};
+use flagforge_storage::{PgPool, accounts, api_keys, audit, flags, projects, segments};
 use uuid::Uuid;
 
 use crate::auth::{keys, password};
 use crate::routes::new_salt;
+
+/// The one demo segment, referenced by a flag rule below.
+const BETA_SEGMENT: &str = "beta-testers";
 
 pub struct Credentials {
     pub email: String,
@@ -75,6 +81,65 @@ pub async fn run(pool: &PgPool, credentials: Credentials) -> anyhow::Result<()> 
             projects::create_environment(pool, project.id, key, name, &new_salt(), production)
                 .await?,
         );
+    }
+
+    // Segments before flags: a rule may only name a segment its environment
+    // already defines, so seeding the other way round would be refused by the
+    // same check that protects a real write.
+    for environment in &environments {
+        let segment = segments::create_segment(
+            pool,
+            environment.id,
+            BETA_SEGMENT,
+            "Beta testers",
+            Some("Opted-in accounts, plus a slice of enterprise traffic."),
+        )
+        .await?;
+
+        // Narrower in production than in staging — which is the reason
+        // segments are environment-scoped in the first place.
+        let rules = if environment.is_production {
+            vec![SegmentRule {
+                rollout: Some(SegmentRollout { percentage: 20_000, bucket_by: None }),
+                ..SegmentRule::new(
+                    Uuid::from_u128(90),
+                    vec![Condition::new(
+                        "plan",
+                        Operator::In,
+                        vec![AttributeValue::String("enterprise".into())],
+                    )],
+                )
+            }]
+        } else {
+            vec![SegmentRule::new(Uuid::from_u128(91), Vec::new())]
+        };
+
+        segments::update_segment(
+            pool,
+            environment.id,
+            &segment.key,
+            None,
+            None,
+            Some(&BTreeSet::from(["user-7".to_owned(), "user-42".to_owned()])),
+            Some(&BTreeSet::from(["user-13".to_owned()])),
+            Some(&rules),
+            None,
+        )
+        .await?;
+
+        audit::record(
+            pool,
+            NewAuditEntry::new(
+                organization.id,
+                actor,
+                "segment.created",
+                "segment",
+                format!("checkout/{}/{}", environment.key, BETA_SEGMENT),
+            )
+            .in_environment(environment.id)
+            .changing(None, Some(&segment)),
+        )
+        .await?;
     }
 
     for definition in catalogue() {
@@ -194,12 +259,11 @@ fn rule(
     values: Vec<AttributeValue>,
     serve: &str,
 ) -> Rule {
-    Rule {
-        id: Uuid::from_u128(id),
-        description: None,
-        conditions: vec![Condition::new(attribute, operator, values)],
-        distribution: Distribution::fixed(serve),
-    }
+    Rule::new(
+        Uuid::from_u128(id),
+        vec![Condition::new(attribute, operator, values)],
+        Distribution::fixed(serve),
+    )
 }
 
 fn rollout(on: u32) -> Distribution {
@@ -272,7 +336,17 @@ fn catalogue() -> Vec<Seeded> {
             description: "Kill switch for the provider migration.",
             variants: boolean_variants(),
             off_variant: "off",
-            production: EnvConfig { enabled: true, fallthrough: rollout(1_000), rules: Vec::new() },
+            production: EnvConfig {
+                enabled: true,
+                fallthrough: rollout(1_000),
+                rules: vec![{
+                    let mut r =
+                        Rule::new(Uuid::from_u128(3), Vec::new(), Distribution::fixed("on"))
+                            .targeting(SegmentMatch::any_of([BETA_SEGMENT]));
+                    r.description = Some("Beta testers get the new provider first".into());
+                    r
+                }],
+            },
             staging: EnvConfig {
                 enabled: true,
                 fallthrough: Distribution::fixed("on"),

@@ -6,7 +6,7 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::routes::{audit, auth, evaluate, flags, health, keys, projects};
+use crate::routes::{audit, auth, evaluate, flags, health, keys, projects, segments};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -23,6 +23,7 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects};
         (name = "projects", description = "Projects"),
         (name = "environments", description = "Environments within a project"),
         (name = "flags", description = "Flag definitions and per-environment configuration"),
+        (name = "segments", description = "Reusable audiences that flag rules reference"),
         (name = "keys", description = "SDK keys"),
         (name = "audit", description = "Change history"),
         (name = "evaluate", description = "The SDK-facing evaluation API"),
@@ -48,6 +49,11 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects};
         flags::list_configured,
         flags::get_config,
         flags::update_config,
+        segments::list,
+        segments::create,
+        segments::get,
+        segments::update,
+        segments::delete,
         keys::create,
         keys::list,
         keys::revoke,
@@ -68,6 +74,10 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects};
         flagforge_core::Condition,
         flagforge_core::Operator,
         flagforge_core::Rule,
+        flagforge_core::Segment,
+        flagforge_core::SegmentRule,
+        flagforge_core::SegmentRollout,
+        flagforge_core::SegmentMatch,
         flagforge_core::EvaluationContext,
         flagforge_core::Evaluation,
         flagforge_core::Reason,
@@ -80,6 +90,8 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects};
         flagforge_storage::models::Flag,
         flagforge_storage::models::FlagConfig,
         flagforge_storage::flags::ConfiguredFlag,
+        flagforge_storage::models::Segment,
+        crate::routes::segments::SegmentWithUsage,
         flagforge_storage::models::ApiKey,
         flagforge_storage::models::KeyScope,
         flagforge_storage::models::AuditEntry,
@@ -173,6 +185,23 @@ mod tests {
         assert!(stored.contains_key("archived") && stored.contains_key("project_id"));
         assert!(defined.contains_key("fallthrough") && defined.contains_key("rules"));
         assert!(!stored.contains_key("rules"), "the stored record absorbed the domain schema");
+    }
+
+    /// Segments have the same two-views-one-name problem as flags, so they get
+    /// the same guard.
+    #[test]
+    fn the_domain_and_storage_segments_do_not_collide() {
+        let document = <ApiDoc as OpenApi>::openapi();
+        let json = serde_json::to_value(&document).unwrap();
+        let schemas = &json["components"]["schemas"];
+
+        let stored = schemas["Segment"]["properties"].as_object().expect("stored Segment schema");
+        let defined =
+            schemas["SegmentDefinition"]["properties"].as_object().expect("domain Segment schema");
+
+        assert!(stored.contains_key("environment_id") && stored.contains_key("created_at"));
+        assert!(defined.contains_key("included") && defined.contains_key("rules"));
+        assert!(!defined.contains_key("environment_id"), "the domain schema absorbed the record");
     }
 
     /// The salt is disclosed by exactly one endpoint. If it ever turns up in a

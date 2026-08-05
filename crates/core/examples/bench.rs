@@ -12,8 +12,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use flagforge_core::{
-    AttributeValue, Condition, Distribution, EvaluationContext, Flag, Operator, Rule, TOTAL_WEIGHT,
-    Variant, WeightedVariant, evaluate,
+    AttributeValue, Condition, Distribution, EvaluationContext, EvaluationEnv, Flag, Operator,
+    Rule, Segment, SegmentMatch, SegmentRule, SegmentSet, TOTAL_WEIGHT, Variant, WeightedVariant,
+    evaluate,
 };
 use uuid::Uuid;
 
@@ -31,6 +32,9 @@ fn main() {
         })
         .collect();
 
+    let empty = SegmentSet::new();
+    let plain = EvaluationEnv::with_segments(SALT, &empty);
+
     for (label, flag) in [
         ("off (kill switch)", off_flag()),
         ("fallthrough, no rules", simple_flag()),
@@ -38,21 +42,28 @@ fn main() {
         ("5 rules, last one matches", rules_flag(5)),
         ("20 rules, none match", rules_flag(20)),
     ] {
-        report(label, &flag, &contexts);
+        report(label, &flag, &contexts, &plain);
     }
+
+    // Segments cost an extra lookup and a second condition pass, so they get
+    // their own line rather than hiding inside the numbers above.
+    let segments = segment_set();
+    let with_segments = EvaluationEnv::with_segments(SALT, &segments);
+    report("rule behind a segment", &segment_flag(), &contexts, &with_segments);
+    report("segment with a rollout", &cohort_flag(), &contexts, &with_segments);
 }
 
-fn report(label: &str, flag: &Flag, contexts: &[EvaluationContext]) {
+fn report(label: &str, flag: &Flag, contexts: &[EvaluationContext], env: &EvaluationEnv<'_>) {
     // Warm the caches and the regex compilation so the first iteration is not
     // charged for everyone else's setup.
     for context in contexts.iter().take(100) {
-        black_box(evaluate(flag, context, SALT));
+        black_box(evaluate(flag, context, env));
     }
 
     let started = Instant::now();
     for i in 0..ITERATIONS {
         let context = &contexts[(i as usize) % contexts.len()];
-        black_box(evaluate(black_box(flag), black_box(context), SALT));
+        black_box(evaluate(black_box(flag), black_box(context), black_box(env)));
     }
     let elapsed = started.elapsed();
 
@@ -85,25 +96,29 @@ fn rollout_flag() -> Flag {
 /// evaluated in full. This is the worst realistic case.
 fn rules_flag(count: usize) -> Flag {
     let mut rules: Vec<Rule> = (0..count.saturating_sub(1))
-        .map(|i| Rule {
-            id: Uuid::from_u128(i as u128),
-            description: None,
-            conditions: vec![
-                Condition::new(
-                    "country",
-                    Operator::In,
-                    vec![AttributeValue::String(format!("XX{i}"))],
-                ),
-                Condition::new("seats", Operator::GreaterThan, vec![AttributeValue::Number(1e9)]),
-            ],
-            distribution: Distribution::fixed("on"),
+        .map(|i| {
+            Rule::new(
+                Uuid::from_u128(i as u128),
+                vec![
+                    Condition::new(
+                        "country",
+                        Operator::In,
+                        vec![AttributeValue::String(format!("XX{i}"))],
+                    ),
+                    Condition::new(
+                        "seats",
+                        Operator::GreaterThan,
+                        vec![AttributeValue::Number(1e9)],
+                    ),
+                ],
+                Distribution::fixed("on"),
+            )
         })
         .collect();
 
-    rules.push(Rule {
-        id: Uuid::from_u128(u128::MAX),
-        description: None,
-        conditions: vec![
+    rules.push(Rule::new(
+        Uuid::from_u128(u128::MAX),
+        vec![
             Condition::new("plan", Operator::In, vec![AttributeValue::String("pro".into())]),
             Condition::new(
                 "app_version",
@@ -116,12 +131,48 @@ fn rules_flag(count: usize) -> Flag {
                 vec![AttributeValue::String("^(ES|US|FR)$".into())],
             ),
         ],
-        distribution: Distribution::fixed("on"),
-    });
+        Distribution::fixed("on"),
+    ));
 
     Flag {
         variants: vec![Variant::new("on", true), Variant::new("off", false)],
         ..Flag::boolean("bench.rules").enabled(true)
     }
     .with_rules(rules)
+}
+
+/// The audiences the segment benchmarks resolve against.
+fn segment_set() -> SegmentSet {
+    [
+        Segment::new("pro-in-europe").with_rules(vec![SegmentRule::new(
+            Uuid::from_u128(1),
+            vec![
+                Condition::new("plan", Operator::In, vec![AttributeValue::String("pro".into())]),
+                Condition::new("country", Operator::In, vec![AttributeValue::String("ES".into())]),
+            ],
+        )]),
+        Segment::new("canary").with_rules(vec![SegmentRule {
+            rollout: Some(flagforge_core::SegmentRollout { percentage: 10_000, bucket_by: None }),
+            ..SegmentRule::new(Uuid::from_u128(2), vec![])
+        }]),
+    ]
+    .into_iter()
+    .map(|s| (s.key.clone(), s))
+    .collect()
+}
+
+/// One rule, gated on a segment whose membership needs two conditions.
+fn segment_flag() -> Flag {
+    Flag::boolean("bench.segment").enabled(true).with_rules(vec![
+        Rule::new(Uuid::from_u128(1), vec![], Distribution::fixed("on"))
+            .targeting(SegmentMatch::any_of(["pro-in-europe"])),
+    ])
+}
+
+/// A segment whose membership is itself a percentage — the extra hash.
+fn cohort_flag() -> Flag {
+    Flag::boolean("bench.cohort").enabled(true).with_rules(vec![
+        Rule::new(Uuid::from_u128(1), vec![], Distribution::fixed("on"))
+            .targeting(SegmentMatch::any_of(["canary"])),
+    ])
 }

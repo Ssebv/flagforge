@@ -31,6 +31,7 @@
   --amber-500: #f59e0b;
   --amber-600: #d97706;
   --amber-700: #b45309;
+  --amber-800: #92400e;
 
   --green-500: #16a34a;
   --green-600: #15803d;
@@ -75,8 +76,11 @@
   --text-muted: var(--grey-600);
   --text-subtle: var(--grey-500);
 
-  --accent: var(--amber-600);
-  --accent-hover: var(--amber-700);
+  /* The fill behind white text, not the brand colour: white on #d97706 is
+     3.2:1 and fails AA at button sizes, the same trap `--accent-text` below
+     documents for accent-as-text. */
+  --accent: var(--amber-700);
+  --accent-hover: var(--amber-800);
   --accent-fg: #ffffff;
   --accent-soft: #fef3e2;
   --accent-soft-fg: #8a3f07;
@@ -88,8 +92,9 @@
   --info-soft: #dbeafe;
   --info-fg: #1d4ed8;
 
-  /* Accent as *text* needs to be darker than accent as a fill: #d97706 on
-     white is 3.0:1, which fails for anything but large text. */
+  /* Accent as text, kept as its own token even though it now matches
+     `--accent`: they answer different questions, and a future lightening of
+     the fill must not silently drag the text colour with it. */
   --accent-text: var(--amber-700);
 
   --bar-fg: #ffffff;
@@ -432,7 +437,9 @@ code {
 
 .identity__org {
   font-size: 12px;
-  color: var(--text-subtle);
+  /* Subtle rather than muted would be 4.4:1 against the sidebar at 12px —
+     just under AA, and this line names the tenant you are editing. */
+  color: var(--text-muted);
 }
 
 .main {
@@ -853,7 +860,10 @@ code {
 }
 
 .cell-secondary {
-  color: var(--text-subtle);
+  /* Muted, not subtle: at 12px on a tinted row or card footer, subtle lands
+     at 4.4:1 — under AA by a hair, and this is where "last used" and "still
+     referenced by" live. */
+  color: var(--text-muted);
   font-size: 12px;
 }
 

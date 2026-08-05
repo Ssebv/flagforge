@@ -4,11 +4,12 @@
 //! database is guaranteed evaluable, so [`crate::engine::Reason::Error`] should
 //! only ever be seen in tests.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::flag::{Distribution, Flag, Operator, TOTAL_WEIGHT};
+use crate::flag::{Condition, Distribution, Flag, Operator, TOTAL_WEIGHT};
+use crate::segment::{Segment, SegmentMatch};
 
 /// Maximum length of a flag or variant key.
 pub const MAX_KEY_LEN: usize = 128;
@@ -86,41 +87,10 @@ pub fn validate(flag: &Flag) -> Result<(), Vec<ValidationIssue>> {
             ));
         }
 
-        for (j, condition) in rule.conditions.iter().enumerate() {
-            let path = format!("rules[{i}].conditions[{j}]");
+        check_conditions(&rule.conditions, &format!("rules[{i}]"), &mut issues);
 
-            if condition.attribute.trim().is_empty() {
-                issues.push(ValidationIssue::new(
-                    format!("{path}.attribute"),
-                    "attribute name cannot be empty",
-                ));
-            }
-
-            if condition.operator.takes_values() && condition.values.is_empty() {
-                issues.push(ValidationIssue::new(
-                    format!("{path}.values"),
-                    format!("operator `{:?}` requires at least one value", condition.operator),
-                ));
-            }
-
-            if matches!(condition.operator, Operator::Matches | Operator::NotMatches) {
-                for (k, value) in condition.values.iter().enumerate() {
-                    match value.as_str() {
-                        Some(pattern) => {
-                            if let Err(err) = regex::Regex::new(pattern) {
-                                issues.push(ValidationIssue::new(
-                                    format!("{path}.values[{k}]"),
-                                    format!("invalid regular expression: {err}"),
-                                ));
-                            }
-                        }
-                        None => issues.push(ValidationIssue::new(
-                            format!("{path}.values[{k}]"),
-                            "regex operators take string patterns",
-                        )),
-                    }
-                }
-            }
+        if let Some(required) = &rule.segments {
+            check_segment_match(required, &format!("rules[{i}].segments"), &mut issues);
         }
 
         check_distribution(
@@ -132,6 +102,161 @@ pub fn validate(flag: &Flag) -> Result<(), Vec<ValidationIssue>> {
     }
 
     if issues.is_empty() { Ok(()) } else { Err(issues) }
+}
+
+/// Rejects anything that would make a segment undecidable.
+///
+/// Separate from [`validate`] because a segment is stored on its own, not as
+/// part of a flag: the two are written by different endpoints and each has to
+/// be rejectable without the other.
+pub fn validate_segment(segment: &Segment) -> Result<(), Vec<ValidationIssue>> {
+    let mut issues = Vec::new();
+
+    if !is_valid_key(&segment.key) {
+        issues.push(ValidationIssue::new(
+            "key",
+            format!(
+                "must be 1-{MAX_KEY_LEN} characters of [a-zA-Z0-9], `.`, `_` or `-`, got `{}`",
+                segment.key
+            ),
+        ));
+    }
+
+    // Both lists holding the same context key is not ambiguous — exclusion wins
+    // — but it is always a mistake, and silently honouring it hides the moment
+    // someone adds an account to the wrong list.
+    for key in segment.included.intersection(&segment.excluded) {
+        issues.push(ValidationIssue::new(
+            "excluded",
+            format!("`{key}` is both included and excluded"),
+        ));
+    }
+
+    let mut rule_ids = HashSet::new();
+    for (i, rule) in segment.rules.iter().enumerate() {
+        if !rule_ids.insert(rule.id) {
+            issues.push(ValidationIssue::new(
+                format!("rules[{i}].id"),
+                format!("duplicate rule id `{}`", rule.id),
+            ));
+        }
+
+        check_conditions(&rule.conditions, &format!("rules[{i}]"), &mut issues);
+
+        if let Some(rollout) = &rule.rollout {
+            let path = format!("rules[{i}].rollout");
+            if rollout.percentage > TOTAL_WEIGHT {
+                issues.push(ValidationIssue::new(
+                    format!("{path}.percentage"),
+                    format!("must be between 0 and {TOTAL_WEIGHT} (got {})", rollout.percentage),
+                ));
+            }
+            if let Some(attribute) = &rollout.bucket_by
+                && attribute.trim().is_empty()
+            {
+                issues.push(ValidationIssue::new(
+                    format!("{path}.bucket_by"),
+                    "bucketing attribute cannot be empty",
+                ));
+            }
+        }
+    }
+
+    if issues.is_empty() { Ok(()) } else { Err(issues) }
+}
+
+/// Rejects rules pointing at segments the environment does not define.
+///
+/// This cannot live in [`validate`]: a dangling reference is only detectable
+/// against the environment's segments, and the shape check is deliberately a
+/// pure function of the flag alone. Takes the keys rather than the segments
+/// because that is all it needs, and the caller that has only the keys is the
+/// one on the write path.
+pub fn validate_references(
+    flag: &Flag,
+    known: &BTreeSet<String>,
+) -> Result<(), Vec<ValidationIssue>> {
+    let mut issues = Vec::new();
+
+    for (i, rule) in flag.rules.iter().enumerate() {
+        let Some(required) = &rule.segments else { continue };
+        for key in required.referenced() {
+            if !known.contains(key) {
+                issues.push(ValidationIssue::new(
+                    format!("rules[{i}].segments"),
+                    format!("no segment `{key}` in this environment"),
+                ));
+            }
+        }
+    }
+
+    if issues.is_empty() { Ok(()) } else { Err(issues) }
+}
+
+fn check_segment_match(required: &SegmentMatch, path: &str, issues: &mut Vec<ValidationIssue>) {
+    if required.is_empty() {
+        issues.push(ValidationIssue::new(
+            path,
+            "a segment requirement must name at least one segment",
+        ));
+        return;
+    }
+
+    for key in required.referenced() {
+        if key.trim().is_empty() {
+            issues.push(ValidationIssue::new(path, "segment key cannot be empty"));
+        }
+    }
+
+    // Requiring membership and forbidding it at once makes the rule dead code.
+    let forbidden: HashSet<&str> = required.none_of.iter().map(String::as_str).collect();
+    for key in required.any_of.iter().filter(|k| forbidden.contains(k.as_str())) {
+        issues.push(ValidationIssue::new(
+            path,
+            format!("`{key}` is both required and excluded, so the rule can never match"),
+        ));
+    }
+}
+
+/// The per-condition checks, shared by flag rules and segment rules — the two
+/// use the same [`Condition`] type and must reject the same mistakes.
+fn check_conditions(conditions: &[Condition], prefix: &str, issues: &mut Vec<ValidationIssue>) {
+    for (j, condition) in conditions.iter().enumerate() {
+        let path = format!("{prefix}.conditions[{j}]");
+
+        if condition.attribute.trim().is_empty() {
+            issues.push(ValidationIssue::new(
+                format!("{path}.attribute"),
+                "attribute name cannot be empty",
+            ));
+        }
+
+        if condition.operator.takes_values() && condition.values.is_empty() {
+            issues.push(ValidationIssue::new(
+                format!("{path}.values"),
+                format!("operator `{:?}` requires at least one value", condition.operator),
+            ));
+        }
+
+        if matches!(condition.operator, Operator::Matches | Operator::NotMatches) {
+            for (k, value) in condition.values.iter().enumerate() {
+                match value.as_str() {
+                    Some(pattern) => {
+                        if let Err(err) = regex::Regex::new(pattern) {
+                            issues.push(ValidationIssue::new(
+                                format!("{path}.values[{k}]"),
+                                format!("invalid regular expression: {err}"),
+                            ));
+                        }
+                    }
+                    None => issues.push(ValidationIssue::new(
+                        format!("{path}.values[{k}]"),
+                        "regex operators take string patterns",
+                    )),
+                }
+            }
+        }
+    }
 }
 
 fn check_distribution(
@@ -290,6 +415,7 @@ mod tests {
                 Operator::Matches,
                 vec![AttributeValue::String("([a-z".into())],
             )],
+            segments: None,
             distribution: Distribution::fixed("on"),
         }]);
         let issues = validate(&flag).unwrap_err();
@@ -302,6 +428,7 @@ mod tests {
             id: Uuid::nil(),
             description: None,
             conditions: vec![Condition::new("plan", Operator::In, vec![])],
+            segments: None,
             distribution: Distribution::fixed("on"),
         }]);
         assert_eq!(paths(&validate(&flag).unwrap_err()), ["rules[0].conditions[0].values"]);
@@ -313,9 +440,111 @@ mod tests {
             id: Uuid::nil(),
             description: None,
             conditions: vec![Condition::new("plan", Operator::Exists, vec![])],
+            segments: None,
             distribution: Distribution::fixed("on"),
         }]);
         assert!(validate(&flag).is_ok());
+    }
+
+    // ------------------------------------------------------------ segments --
+
+    use crate::segment::{SegmentRollout, SegmentRule};
+    use std::collections::BTreeSet;
+
+    fn segment_with(rules: Vec<SegmentRule>) -> Segment {
+        Segment::new("beta").with_rules(rules)
+    }
+
+    #[test]
+    fn an_empty_segment_is_valid() {
+        assert!(validate_segment(&Segment::new("beta")).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_context_key_that_is_both_included_and_excluded() {
+        let segment = Segment {
+            included: BTreeSet::from(["u".to_owned()]),
+            excluded: BTreeSet::from(["u".to_owned()]),
+            ..Segment::new("beta")
+        };
+        let issues = validate_segment(&segment).unwrap_err();
+        assert_eq!(paths(&issues), ["excluded"]);
+    }
+
+    #[test]
+    fn rejects_a_segment_rollout_above_the_total() {
+        let segment = segment_with(vec![SegmentRule {
+            rollout: Some(SegmentRollout { percentage: TOTAL_WEIGHT + 1, bucket_by: None }),
+            ..SegmentRule::new(Uuid::nil(), vec![])
+        }]);
+        assert_eq!(
+            paths(&validate_segment(&segment).unwrap_err()),
+            ["rules[0].rollout.percentage"]
+        );
+    }
+
+    #[test]
+    fn segment_rules_get_the_same_condition_checks_as_flag_rules() {
+        let segment = segment_with(vec![SegmentRule::new(
+            Uuid::nil(),
+            vec![Condition::new(
+                "email",
+                Operator::Matches,
+                vec![AttributeValue::String("([a-z".into())],
+            )],
+        )]);
+        assert_eq!(
+            paths(&validate_segment(&segment).unwrap_err()),
+            ["rules[0].conditions[0].values[0]"]
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_segment_rule_ids() {
+        let segment = segment_with(vec![
+            SegmentRule::new(Uuid::nil(), vec![]),
+            SegmentRule::new(Uuid::nil(), vec![]),
+        ]);
+        assert_eq!(paths(&validate_segment(&segment).unwrap_err()), ["rules[1].id"]);
+    }
+
+    #[test]
+    fn rejects_a_segment_requirement_that_names_nothing() {
+        let flag = Flag::boolean("f").with_rules(vec![
+            Rule::new(Uuid::nil(), vec![], Distribution::fixed("on"))
+                .targeting(SegmentMatch::default()),
+        ]);
+        assert_eq!(paths(&validate(&flag).unwrap_err()), ["rules[0].segments"]);
+    }
+
+    #[test]
+    fn rejects_a_rule_that_both_requires_and_excludes_one_segment() {
+        let flag = Flag::boolean("f").with_rules(vec![
+            Rule::new(Uuid::nil(), vec![], Distribution::fixed("on")).targeting(SegmentMatch {
+                any_of: vec!["beta".into()],
+                none_of: vec!["beta".into()],
+            }),
+        ]);
+        let issues = validate(&flag).unwrap_err();
+        assert_eq!(paths(&issues), ["rules[0].segments"]);
+        assert!(issues[0].message.contains("never match"));
+    }
+
+    #[test]
+    fn rejects_references_to_segments_the_environment_does_not_define() {
+        let flag = Flag::boolean("f").with_rules(vec![
+            Rule::new(Uuid::nil(), vec![], Distribution::fixed("on"))
+                .targeting(SegmentMatch::any_of(["ghost"])),
+        ]);
+
+        // The shape is fine on its own — only the environment can say otherwise.
+        assert!(validate(&flag).is_ok());
+
+        let none = BTreeSet::new();
+        assert_eq!(paths(&validate_references(&flag, &none).unwrap_err()), ["rules[0].segments"]);
+
+        let known = BTreeSet::from(["ghost".to_owned()]);
+        assert!(validate_references(&flag, &known).is_ok());
     }
 
     #[test]

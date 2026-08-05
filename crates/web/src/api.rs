@@ -4,11 +4,12 @@
 //! does, so a change to `Rule` or `Distribution` breaks this crate at compile
 //! time rather than at runtime in someone's browser.
 
-use flagforge_core::{Distribution, Rule, ValidationIssue, Variant};
+use flagforge_core::{Distribution, Rule, SegmentRule, ValidationIssue, Variant};
 use gloo_net::http::Request;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// Same origin as the app. Serving the SPA from the API binary means there is
 /// no base URL to configure and no CORS preflight on the management API.
@@ -170,6 +171,41 @@ pub mod models {
         pub config: FlagConfig,
     }
 
+    /// A reusable audience, as the management API returns it.
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct Segment {
+        pub id: String,
+        pub key: String,
+        pub name: String,
+        pub description: Option<String>,
+        #[serde(default)]
+        pub included: BTreeSet<String>,
+        #[serde(default)]
+        pub excluded: BTreeSet<String>,
+        #[serde(default)]
+        pub rules: Vec<SegmentRule>,
+        pub version: i64,
+        pub updated_at: String,
+    }
+
+    impl Segment {
+        /// Roughly how many ways in there are, for the list view. Not a member
+        /// count — that would need the whole population — but it does
+        /// distinguish "defined" from "empty".
+        pub fn is_empty(&self) -> bool {
+            self.included.is_empty() && self.rules.is_empty()
+        }
+    }
+
+    /// A segment plus the flags whose rules name it.
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct SegmentWithUsage {
+        #[serde(flatten)]
+        pub segment: Segment,
+        #[serde(default)]
+        pub referenced_by: Vec<String>,
+    }
+
     #[derive(Debug, Clone, PartialEq, Deserialize)]
     pub struct ApiKey {
         pub id: String,
@@ -262,6 +298,28 @@ pub struct ConfigBody {
     /// Always sent. Every write from the dashboard is guarded, so two people
     /// editing the same flag get a clear conflict instead of a silent
     /// overwrite.
+    pub expected_version: i64,
+}
+
+#[derive(Serialize)]
+pub struct NewSegment<'a> {
+    pub key: &'a str,
+    pub name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
+}
+
+/// A full rewrite of a segment's membership. Every field is sent, so the
+/// dashboard never has to reason about which half of a patch it omitted.
+#[derive(Serialize)]
+pub struct SegmentBody {
+    pub name: String,
+    pub included: BTreeSet<String>,
+    pub excluded: BTreeSet<String>,
+    pub rules: Vec<SegmentRule>,
+    /// Always sent, for the same reason `ConfigBody` sends it: one segment
+    /// edit moves every flag that references it, so a silent overwrite here is
+    /// wider than a silent overwrite of one flag.
     pub expected_version: i64,
 }
 
@@ -459,6 +517,81 @@ pub async fn put_config(
         &format!("/projects/{project}/environments/{environment}/flags/{flag}"),
         Some(token),
         json(body),
+    )
+    .await
+}
+
+pub async fn list_segments(
+    token: &str,
+    project: &str,
+    environment: &str,
+) -> Result<Vec<Segment>, ApiError> {
+    send(
+        Method::Get,
+        &format!("/projects/{project}/environments/{environment}/segments"),
+        Some(token),
+        None,
+    )
+    .await
+}
+
+pub async fn get_segment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    segment: &str,
+) -> Result<SegmentWithUsage, ApiError> {
+    send(
+        Method::Get,
+        &format!("/projects/{project}/environments/{environment}/segments/{segment}"),
+        Some(token),
+        None,
+    )
+    .await
+}
+
+pub async fn create_segment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    body: NewSegment<'_>,
+) -> Result<Segment, ApiError> {
+    send(
+        Method::Post,
+        &format!("/projects/{project}/environments/{environment}/segments"),
+        Some(token),
+        json(body),
+    )
+    .await
+}
+
+pub async fn put_segment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    segment: &str,
+    body: SegmentBody,
+) -> Result<Segment, ApiError> {
+    send(
+        Method::Put,
+        &format!("/projects/{project}/environments/{environment}/segments/{segment}"),
+        Some(token),
+        json(body),
+    )
+    .await
+}
+
+pub async fn delete_segment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    segment: &str,
+) -> Result<(), ApiError> {
+    send(
+        Method::Delete,
+        &format!("/projects/{project}/environments/{environment}/segments/{segment}"),
+        Some(token),
+        None,
     )
     .await
 }

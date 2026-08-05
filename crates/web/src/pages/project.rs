@@ -166,6 +166,13 @@ pub fn ProjectDetail() -> impl IntoView {
         >
             <Show when=move || selected.get().is_some()>
                 <A
+                    href=move || format!("/projects/{}/segments", project_key())
+                    attr:class="btn btn--secondary"
+                >
+                    <Icon name="users" />
+                    "Segments"
+                </A>
+                <A
                     href=move || format!("/projects/{}/keys", project_key())
                     attr:class="btn btn--secondary"
                 >

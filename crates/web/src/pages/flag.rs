@@ -6,8 +6,8 @@
 //! as a 422.
 
 use flagforge_core::{
-    AttributeValue, Condition, Distribution, EvaluationContext, Operator, Reason, Rule,
-    TOTAL_WEIGHT, ValidationIssue, Variant, WeightedVariant,
+    AttributeValue, Condition, Distribution, EvaluationContext, EvaluationEnv, Operator, Reason,
+    Rule, SegmentMatch, SegmentSet, TOTAL_WEIGHT, ValidationIssue, Variant, WeightedVariant,
 };
 use leptos::prelude::*;
 use leptos_router::components::A;
@@ -52,6 +52,10 @@ pub fn FlagDetail() -> impl IntoView {
     let environments = RwSignal::new(Load::<Vec<Environment>>::Loading);
     let selected = RwSignal::new(Option::<String>::None);
     let variants = RwSignal::new(Vec::<Variant>::new());
+    // The environment's audiences. Needed to resolve a rule's segment
+    // reference — without them the preview would report every gated rule as
+    // matching nobody while production said otherwise.
+    let segments = RwSignal::new(SegmentSet::new());
     let loaded = RwSignal::new(Load::<Draft>::Loading);
     let draft = RwSignal::new(Option::<Draft>::None);
     let saving = RwSignal::new(false);
@@ -83,6 +87,28 @@ pub fn FlagDetail() -> impl IntoView {
         leptos::task::spawn_local(async move {
             let definition = api::get_flag(&token, &project, &flag).await;
             let config = api::get_config(&token, &project, &environment, &flag).await;
+
+            // Best effort: a flag with no segment references is still fully
+            // editable if this fails, so it must not block the page.
+            if let Ok(list) = api::list_segments(&token, &project, &environment).await {
+                segments.set(
+                    list.into_iter()
+                        .map(|s| {
+                            (
+                                s.key.clone(),
+                                flagforge_core::Segment {
+                                    key: s.key,
+                                    description: s.description,
+                                    included: s.included,
+                                    excluded: s.excluded,
+                                    rules: s.rules,
+                                    version: s.version,
+                                },
+                            )
+                        })
+                        .collect(),
+                );
+            }
 
             match (definition, config) {
                 (Ok(definition), Ok(config)) => {
@@ -126,7 +152,16 @@ pub fn FlagDetail() -> impl IntoView {
                 rules: draft.rules,
                 version: draft.version,
             };
-            flagforge_core::validate(&candidate).err().unwrap_or_default()
+            let mut issues = flagforge_core::validate(&candidate).err().unwrap_or_default();
+            // Naming a segment this environment does not define is only
+            // detectable against the environment, so it is a second pass — and
+            // catching it here shows the operator the problem before the save
+            // is refused.
+            let known = segments.get().keys().cloned().collect();
+            if let Err(dangling) = flagforge_core::validate_references(&candidate, &known) {
+                issues.extend(dangling);
+            }
+            issues
         }
         _ => Vec::new(),
     });
@@ -248,6 +283,7 @@ pub fn FlagDetail() -> impl IntoView {
                                 draft=draft
                                 variants=Signal::derive(move || variants.get())
                                 can_write=Signal::derive(can_write)
+                                segments=Signal::derive(move || segments.get())
                             />
 
                             <FallthroughEditor
@@ -260,6 +296,7 @@ pub fn FlagDetail() -> impl IntoView {
                                 draft=draft
                                 variants=Signal::derive(move || variants.get())
                                 flag_key=Signal::derive(flag_key)
+                                segments=Signal::derive(move || segments.get())
                             />
 
                             <Show when=can_write>
@@ -391,6 +428,7 @@ fn MasterSwitch(draft: RwSignal<Option<Draft>>, can_write: Signal<bool>) -> impl
 fn RulesEditor(
     draft: RwSignal<Option<Draft>>,
     variants: Signal<Vec<Variant>>,
+    segments: Signal<SegmentSet>,
     can_write: Signal<bool>,
 ) -> impl IntoView {
     let rules = Signal::derive(move || draft.get().map(|d| d.rules).unwrap_or_default());
@@ -401,16 +439,15 @@ fn RulesEditor(
 
         draft.update(|d| {
             if let Some(d) = d {
-                d.rules.push(Rule {
-                    id: new_uuid(),
-                    description: None,
-                    conditions: vec![Condition::new(
+                d.rules.push(Rule::new(
+                    new_uuid(),
+                    vec![Condition::new(
                         "plan",
                         Operator::In,
                         vec![AttributeValue::String("pro".into())],
                     )],
-                    distribution: Distribution::Fixed { variant },
-                });
+                    Distribution::Fixed { variant },
+                ));
             }
         });
     };
@@ -453,6 +490,7 @@ fn RulesEditor(
                                         draft=draft
                                         variants=variants
                                         can_write=can_write
+                                        segments=segments
                                     />
                                 }
                             })
@@ -471,6 +509,7 @@ fn RuleCard(
     draft: RwSignal<Option<Draft>>,
     variants: Signal<Vec<Variant>>,
     can_write: Signal<bool>,
+    segments: Signal<SegmentSet>,
 ) -> impl IntoView {
     let remove = move |_| {
         draft.update(|d| {
@@ -569,6 +608,50 @@ fn RuleCard(
                     </button>
                 </Show>
 
+                {segment_entries(rule.segments.as_ref())
+                    .into_iter()
+                    .enumerate()
+                    .map(|(position, (required, key))| {
+                        view! {
+                            <SegmentRow
+                                rule_index=index
+                                position=position
+                                first=rule.conditions.is_empty() && position == 0
+                                required=required
+                                segment_key=key
+                                draft=draft
+                                can_write=can_write
+                                segments=segments
+                            />
+                        }
+                    })
+                    .collect_view()}
+
+                <Show when=move || can_write.get() && !segments.get().is_empty()>
+                    <button
+                        class="btn btn--ghost btn--sm"
+                        style="align-self:flex-start"
+                        on:click=move |_| {
+                            let Some(first) = segments.get_untracked().keys().next().cloned() else {
+                                return;
+                            };
+                            draft
+                                .update(|d| {
+                                    if let Some(d) = d
+                                        && let Some(rule) = d.rules.get_mut(index)
+                                    {
+                                        let mut entries = segment_entries(rule.segments.as_ref());
+                                        entries.push((true, first.clone()));
+                                        rule.segments = to_segment_match(entries);
+                                    }
+                                })
+                        }
+                    >
+                        <Icon name="plus" />
+                        "Add segment"
+                    </button>
+                </Show>
+
                 <div class="row" style="gap:var(--space-3);padding-top:var(--space-2)">
                     <span class="condition__joiner">"Then serve"</span>
                     <select
@@ -607,6 +690,151 @@ fn RuleCard(
                     </select>
                 </div>
             </div>
+        </div>
+    }
+}
+
+/// One row of a rule's segment requirement: whether membership is required
+/// (rather than forbidden), and which segment.
+type SegmentEntries = Vec<(bool, String)>;
+
+/// A rule's segment requirement, flattened into one row per referenced
+/// segment. `any_of` and `none_of` are two lists in the model but one list of
+/// choices to an operator, and keeping the UI shape closer to how it reads
+/// avoids two near-identical editors.
+fn segment_entries(required: Option<&SegmentMatch>) -> SegmentEntries {
+    let Some(required) = required else { return Vec::new() };
+    required
+        .any_of
+        .iter()
+        .map(|key| (true, key.clone()))
+        .chain(required.none_of.iter().map(|key| (false, key.clone())))
+        .collect()
+}
+
+fn to_segment_match(entries: SegmentEntries) -> Option<SegmentMatch> {
+    if entries.is_empty() {
+        return None;
+    }
+    let mut required = SegmentMatch::default();
+    for (must_be_in, key) in entries {
+        if must_be_in {
+            required.any_of.push(key);
+        } else {
+            required.none_of.push(key);
+        }
+    }
+    Some(required)
+}
+
+#[component]
+fn SegmentRow(
+    rule_index: usize,
+    position: usize,
+    /// Whether this is the rule's first predicate, so the row reads "If" and
+    /// not "And" when the rule has no conditions above it.
+    first: bool,
+    required: bool,
+    segment_key: String,
+    draft: RwSignal<Option<Draft>>,
+    can_write: Signal<bool>,
+    segments: Signal<SegmentSet>,
+) -> impl IntoView {
+    let mutate = move |apply: Box<dyn Fn(&mut SegmentEntries)>| {
+        draft.update(|d| {
+            if let Some(d) = d
+                && let Some(rule) = d.rules.get_mut(rule_index)
+            {
+                let mut entries = segment_entries(rule.segments.as_ref());
+                apply(&mut entries);
+                rule.segments = to_segment_match(entries);
+            }
+        })
+    };
+
+    let current = segment_key.clone();
+
+    view! {
+        <div class="condition">
+            <div class="row" style="gap:var(--space-2)">
+                <span class="condition__joiner">
+                    {if first { "If is" } else { "And is" }}
+                </span>
+                <select
+                    class="select"
+                    style="max-width:110px"
+                    aria-label="Segment membership"
+                    disabled=move || !can_write.get()
+                    on:change=move |e| {
+                        let must_be_in = event_target_value(&e) == "in";
+                        mutate(
+                            Box::new(move |entries| {
+                                if let Some(entry) = entries.get_mut(position) {
+                                    entry.0 = must_be_in;
+                                }
+                            }),
+                        );
+                    }
+                >
+                    <option value="in" selected=required>
+                        "in"
+                    </option>
+                    <option value="not_in" selected=!required>
+                        "not in"
+                    </option>
+                </select>
+            </div>
+
+            <select
+                class="select"
+                aria-label="Segment"
+                disabled=move || !can_write.get()
+                on:change=move |e| {
+                    let key = event_target_value(&e);
+                    mutate(
+                        Box::new(move |entries| {
+                            if let Some(entry) = entries.get_mut(position) {
+                                entry.1 = key.clone();
+                            }
+                        }),
+                    );
+                }
+            >
+                {move || {
+                    let selected_key = current.clone();
+                    segments
+                        .get()
+                        .into_keys()
+                        .map(|key| {
+                            let chosen = key == selected_key;
+                            let (value, label) = (key.clone(), key);
+                            view! {
+                                <option value=value selected=chosen>
+                                    {label}
+                                </option>
+                            }
+                        })
+                        .collect_view()
+                }}
+            </select>
+
+            <span class="hint">"a reusable audience"</span>
+
+            <Show when=move || can_write.get()>
+                <button
+                    class="btn btn--ghost btn--icon btn--sm"
+                    aria-label="Remove segment requirement"
+                    on:click=move |_| {
+                        mutate(
+                            Box::new(move |entries| {
+                                entries.remove(position);
+                            }),
+                        );
+                    }
+                >
+                    <Icon name="close" />
+                </button>
+            </Show>
         </div>
     }
 }
@@ -979,6 +1207,7 @@ fn Preview(
     draft: RwSignal<Option<Draft>>,
     variants: Signal<Vec<Variant>>,
     flag_key: Signal<String>,
+    segments: Signal<SegmentSet>,
 ) -> impl IntoView {
     let subject = RwSignal::new("user-42".to_owned());
     let attributes = RwSignal::new("plan=pro\ncountry=ES".to_owned());
@@ -1020,7 +1249,9 @@ fn Preview(
     });
 
     let decision = Memo::new(move |_| {
-        candidate.get().map(|flag| flagforge_core::evaluate(&flag, &context.get(), PREVIEW_SALT))
+        let known = segments.get();
+        let env = EvaluationEnv::with_segments(PREVIEW_SALT, &known);
+        candidate.get().map(|flag| flagforge_core::evaluate(&flag, &context.get(), &env))
     });
 
     // Aggregate simulation. Unlike a single subject's assignment, the split
@@ -1029,12 +1260,14 @@ fn Preview(
     let simulation = Memo::new(move |_| {
         let Some(flag) = candidate.get() else { return Vec::new() };
         let base = context.get();
+        let known = segments.get();
+        let env = EvaluationEnv::with_segments(PREVIEW_SALT, &known);
 
         let mut tally: Vec<(String, u32)> = Vec::new();
         for i in 0..SIMULATED_SUBJECTS {
             let mut ctx = base.clone();
             ctx.key = format!("sim-{i}");
-            let outcome = flagforge_core::evaluate(&flag, &ctx, PREVIEW_SALT);
+            let outcome = flagforge_core::evaluate(&flag, &ctx, &env);
             let label = outcome.variant.unwrap_or_else(|| "error".to_owned());
             match tally.iter_mut().find(|(name, _)| *name == label) {
                 Some((_, count)) => *count += 1,
@@ -1262,7 +1495,7 @@ fn DangerZone(project: Signal<String>, flag_key: Signal<String>) -> impl IntoVie
 
 // ------------------------------------------------------------------ helpers --
 
-const OPERATORS: &[(&str, &str)] = &[
+pub(crate) const OPERATORS: &[(&str, &str)] = &[
     ("in", "is any of"),
     ("not_in", "is none of"),
     ("contains", "contains"),
@@ -1286,7 +1519,7 @@ const OPERATORS: &[(&str, &str)] = &[
 ///
 /// Goes through serde rather than a hand-written match, so the strings in
 /// `OPERATORS` can never drift from what the API actually accepts.
-fn operator_key(operator: Operator) -> &'static str {
+pub(crate) fn operator_key(operator: Operator) -> &'static str {
     let serialized = serde_json::to_value(operator)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -1299,11 +1532,11 @@ fn operator_key(operator: Operator) -> &'static str {
         .unwrap_or("in")
 }
 
-fn operator_from(raw: &str) -> Option<Operator> {
+pub(crate) fn operator_from(raw: &str) -> Option<Operator> {
     serde_json::from_value(serde_json::Value::String(raw.to_owned())).ok()
 }
 
-fn parse_values(raw: &str) -> Vec<AttributeValue> {
+pub(crate) fn parse_values(raw: &str) -> Vec<AttributeValue> {
     raw.split(',')
         .map(str::trim)
         .filter(|piece| !piece.is_empty())
@@ -1356,10 +1589,12 @@ fn format_percent(value: f64) -> String {
 
 /// UUID from the browser's own CSPRNG.
 ///
-/// `crypto.randomUUID` rather than the `uuid` crate's v4: it avoids pulling a
-/// randomness backend into the WASM build for one call site.
-fn new_uuid() -> uuid::Uuid {
-    let generated = window().crypto().ok().map(|crypto| crypto.random_uuid()).unwrap_or_default();
-
-    generated.parse().unwrap_or(uuid::Uuid::nil())
+/// Deliberately *not* `crypto.randomUUID`: that one is restricted to secure
+/// contexts, so it is simply undefined on `http://10.0.0.5:8080` — a normal
+/// way to reach a self-hosted service on a private network. Calling it there
+/// threw, and adding a rule silently did nothing. `Uuid::new_v4` goes through
+/// `crypto.getRandomValues`, which has no such restriction, and costs nothing
+/// extra: the `v4` and `js` features were already enabled.
+pub(crate) fn new_uuid() -> uuid::Uuid {
+    uuid::Uuid::new_v4()
 }

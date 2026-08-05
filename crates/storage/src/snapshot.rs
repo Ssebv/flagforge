@@ -7,12 +7,13 @@ use uuid::Uuid;
 
 use crate::error::{FoundExt, Result, StorageError};
 use crate::flags::load_environment_flags;
+use crate::segments::load_environment_segments;
 
 /// Loads everything one environment needs to answer evaluations.
 ///
-/// Two queries: the environment (for its salt) and every configured flag. The
-/// result is self-contained, so once it is in memory the evaluation path never
-/// touches Postgres again.
+/// Three queries: the environment (for its salt), every configured flag, and
+/// every segment their rules might reference. The result is self-contained, so
+/// once it is in memory the evaluation path never touches Postgres again.
 pub async fn load(pool: &PgPool, environment_id: Uuid) -> Result<EnvironmentSnapshot> {
     let env = sqlx::query!(r#"SELECT key, salt FROM environments WHERE id = $1"#, environment_id,)
         .fetch_optional(pool)
@@ -37,7 +38,9 @@ pub async fn load(pool: &PgPool, environment_id: Uuid) -> Result<EnvironmentSnap
         });
     }
 
-    Ok(EnvironmentSnapshot::new(environment_id, env.key, env.salt, flags, Utc::now()))
+    let segments = load_environment_segments(pool, environment_id).await?;
+
+    Ok(EnvironmentSnapshot::new(environment_id, env.key, env.salt, flags, segments, Utc::now()))
 }
 
 /// Resolves `org / project-key / environment-key` to an environment id.

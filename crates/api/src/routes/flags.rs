@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use flagforge_core::{Distribution, Rule, Variant};
 use flagforge_storage::flags::ConfiguredFlag;
 use flagforge_storage::models::{Flag, FlagConfig, NewAuditEntry};
-use flagforge_storage::{audit, flags, projects};
+use flagforge_storage::{audit, flags, projects, segments};
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
@@ -341,13 +341,19 @@ pub async fn update_config(
     let environment = projects::find_environment(&state.pool, project.id, &environment_key).await?;
     let flag = flags::find_flag(&state.pool, project.id, &flag_key).await?;
 
-    validate_evaluable(
+    let candidate = validate_evaluable(
         &flag.key,
         &flag.variants,
         &body.off_variant,
         &body.fallthrough,
         &body.rules,
     )?;
+
+    // A rule may only name a segment this environment actually defines. The
+    // engine would fail such a rule closed, but a rule that silently matches
+    // nobody is a worse outcome than a rejected write.
+    let known = segments::segment_keys(&state.pool, environment.id).await?;
+    flagforge_core::validate_references(&candidate, &known).map_err(ApiError::Unprocessable)?;
 
     let previous = flags::find_config(&state.pool, flag.id, environment.id).await.ok();
 
@@ -397,13 +403,16 @@ pub async fn update_config(
 
 /// Runs the domain validator over the flag exactly as the engine would build
 /// it, turning issues into a 422 with field paths.
+///
+/// Returns the assembled flag so the caller can run the checks that need more
+/// than the flag itself — segment references — without building it twice.
 fn validate_evaluable(
     key: &str,
     variants: &[Variant],
     off_variant: &str,
     fallthrough: &Distribution,
     rules: &[Rule],
-) -> Result<(), ApiError> {
+) -> Result<flagforge_core::Flag, ApiError> {
     let candidate = flagforge_core::Flag {
         key: key.to_owned(),
         variants: variants.to_vec(),
@@ -414,7 +423,8 @@ fn validate_evaluable(
         version: 0,
     };
 
-    flagforge_core::validate(&candidate).map_err(ApiError::Unprocessable)
+    flagforge_core::validate(&candidate).map_err(ApiError::Unprocessable)?;
+    Ok(candidate)
 }
 
 /// Prefixes validation paths with the environment they came from, so a user
