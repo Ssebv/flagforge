@@ -25,8 +25,25 @@ RUN cargo chef prepare --recipe-path recipe.json
 # toolchain never lands in the server build — and so editing the API does not
 # invalidate the frontend layer, or the other way round.
 FROM chef AS web
-RUN rustup target add wasm32-unknown-unknown \
-    && cargo install trunk --locked --version ^0.21
+ARG TARGETARCH
+ARG TRUNK_VERSION=0.21.14
+
+# Trunk's release binary, not `cargo install trunk`. Building it from source
+# pulls in ~300 crates — `minify-html` among them — and peaked hard enough to
+# be OOM-killed on a stock remote builder: `signal: 9, SIGKILL` on a machine
+# with no obvious way to ask for more memory. The published binary needs no
+# compiler and takes seconds.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) target=x86_64-unknown-linux-gnu ;; \
+      arm64) target=aarch64-unknown-linux-gnu ;; \
+      *) echo "no trunk release for TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-${target}.tar.gz" \
+      | tar -xz -C /usr/local/bin trunk; \
+    trunk --version
+
+RUN rustup target add wasm32-unknown-unknown
 
 # The root manifest, even though nothing here builds from it: `crates/core`
 # inherits `edition` and friends from `workspace.package`, so cargo has to be
