@@ -1589,10 +1589,12 @@ fn format_percent(value: f64) -> String {
 
 /// UUID from the browser's own CSPRNG.
 ///
-/// `crypto.randomUUID` rather than the `uuid` crate's v4: it avoids pulling a
-/// randomness backend into the WASM build for one call site.
+/// Deliberately *not* `crypto.randomUUID`: that one is restricted to secure
+/// contexts, so it is simply undefined on `http://10.0.0.5:8080` — a normal
+/// way to reach a self-hosted service on a private network. Calling it there
+/// threw, and adding a rule silently did nothing. `Uuid::new_v4` goes through
+/// `crypto.getRandomValues`, which has no such restriction, and costs nothing
+/// extra: the `v4` and `js` features were already enabled.
 pub(crate) fn new_uuid() -> uuid::Uuid {
-    let generated = window().crypto().ok().map(|crypto| crypto.random_uuid()).unwrap_or_default();
-
-    generated.parse().unwrap_or(uuid::Uuid::nil())
+    uuid::Uuid::new_v4()
 }
