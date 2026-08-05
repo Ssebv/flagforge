@@ -126,9 +126,15 @@ migrations on boot. `seed` prints the sign-in details and an SDK key.
 
 A project with production and staging, and six flags in the shapes a real
 project accumulates — a canary at 1 %, a gradual rollout with a rule for paid
-plans in front of it, a geo-targeted flag, an employees-only flag, a
-three-way multivariate experiment, and one already archived. Enough that every
-screen has something on it and every code path is exercised.
+plans in front of it, a geo-targeted flag, an internal-only flag, a three-way
+multivariate experiment, and one already archived.
+
+Plus a `beta-testers` **segment** in each environment, with the canary's rule
+pointing at it — narrower in production (a fifth of enterprise traffic, two
+accounts always in, one always out) than in staging, which is the reason
+segments are scoped per environment at all.
+
+Enough that every screen has something on it and every code path is exercised.
 </details>
 
 <details>
