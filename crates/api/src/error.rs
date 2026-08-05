@@ -136,6 +136,10 @@ impl From<StorageError> for ApiError {
             // Same status, different meaning: nothing is duplicated, the
             // caller simply lost a race and should re-read before retrying.
             conflict @ StorageError::VersionConflict { .. } => Self::Conflict(conflict.to_string()),
+            // Also a 409: the request is well formed and the row exists, but
+            // honouring it would leave a rule pointing at nothing. The message
+            // names what has to be changed first.
+            in_use @ StorageError::InUse { .. } => Self::Conflict(in_use.to_string()),
             StorageError::Invalid { entity } => {
                 Self::BadRequest(format!("{entity} failed a database constraint"))
             }

@@ -194,12 +194,11 @@ fn rule(
     values: Vec<AttributeValue>,
     serve: &str,
 ) -> Rule {
-    Rule {
-        id: Uuid::from_u128(id),
-        description: None,
-        conditions: vec![Condition::new(attribute, operator, values)],
-        distribution: Distribution::fixed(serve),
-    }
+    Rule::new(
+        Uuid::from_u128(id),
+        vec![Condition::new(attribute, operator, values)],
+        Distribution::fixed(serve),
+    )
 }
 
 fn rollout(on: u32) -> Distribution {

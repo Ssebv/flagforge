@@ -7,6 +7,7 @@ pub mod flags;
 pub mod health;
 pub mod keys;
 pub mod projects;
+pub mod segments;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -84,6 +85,14 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
         .route(
             "/api/v1/projects/{project_key}/environments/{environment_key}/flags/{flag_key}",
             get(flags::get_config).put(flags::update_config),
+        )
+        .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/segments",
+            get(segments::list).post(segments::create),
+        )
+        .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/segments/{segment_key}",
+            get(segments::get).put(segments::update).delete(segments::delete),
         )
         .route(
             "/api/v1/projects/{project_key}/environments/{environment_key}/keys",

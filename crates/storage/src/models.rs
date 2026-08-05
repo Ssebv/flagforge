@@ -1,5 +1,7 @@
 //! Row types shared between the storage and API layers.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -141,6 +143,40 @@ pub struct FlagConfig {
     pub rules: Vec<flagforge_core::Rule>,
     pub version: i64,
     pub updated_at: DateTime<Utc>,
+}
+
+/// A reusable audience, as stored.
+///
+/// Carries the administrative fields the evaluation model has no use for —
+/// name, timestamps, the row id — alongside the membership definition. The
+/// engine only ever sees [`Segment::definition`].
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct Segment {
+    pub id: Uuid,
+    pub environment_id: Uuid,
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub included: BTreeSet<String>,
+    pub excluded: BTreeSet<String>,
+    pub rules: Vec<flagforge_core::SegmentRule>,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Segment {
+    /// The evaluation view of this row.
+    pub fn definition(&self) -> flagforge_core::Segment {
+        flagforge_core::Segment {
+            key: self.key.clone(),
+            description: self.description.clone(),
+            included: self.included.clone(),
+            excluded: self.excluded.clone(),
+            rules: self.rules.clone(),
+            version: self.version,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::segment::SegmentMatch;
 use crate::value::{AttributeValue, VariantValue};
 
 /// Total weight of a percentage rollout, in hundredths of a percent.
@@ -118,7 +119,8 @@ impl Condition {
     }
 }
 
-/// An ordered targeting rule. All of its conditions must hold for it to match.
+/// An ordered targeting rule. All of its conditions must hold, and its segment
+/// requirement with them, for it to match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Rule {
@@ -127,7 +129,23 @@ pub struct Rule {
     pub description: Option<String>,
     #[serde(default)]
     pub conditions: Vec<Condition>,
+    /// Reusable audiences this rule requires, ANDed with `conditions`. Absent
+    /// on every rule written before segments existed, hence the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<SegmentMatch>,
     pub distribution: Distribution,
+}
+
+impl Rule {
+    /// A rule targeting everyone the conditions admit.
+    pub fn new(id: Uuid, conditions: Vec<Condition>, distribution: Distribution) -> Self {
+        Self { id, description: None, conditions, segments: None, distribution }
+    }
+
+    pub fn targeting(mut self, segments: SegmentMatch) -> Self {
+        self.segments = Some(segments);
+        self
+    }
 }
 
 /// A flag as configured for one environment.

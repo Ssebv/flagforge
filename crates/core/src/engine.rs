@@ -1,8 +1,10 @@
 //! The evaluation engine.
 //!
-//! Evaluation is a pure function of (flag, context, salt). It never fails: a
-//! misconfigured flag degrades to its off variant with an explanatory reason,
-//! because an SDK asking "is checkout.v2 on?" must always get an answer.
+//! Evaluation is a pure function of (flag, context, environment). It never
+//! fails: a misconfigured flag degrades to its off variant with an explanatory
+//! reason, because an SDK asking "is checkout.v2 on?" must always get an answer.
+
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -11,7 +13,34 @@ use crate::bucket::{bucket, pick_weighted};
 use crate::context::EvaluationContext;
 use crate::flag::{Distribution, Flag};
 use crate::matcher::rule_matches;
+use crate::segment::SegmentSet;
 use crate::value::VariantValue;
+
+/// What evaluation needs from the environment rather than from the flag: the
+/// bucketing salt, and the segments a rule may reference.
+///
+/// Grouping the two is not just tidiness. They have to come from the same
+/// environment — evaluating a production flag against staging's segments would
+/// be silently wrong — and a single borrowed struct makes that hard to get
+/// wrong at a call site.
+#[derive(Debug, Clone, Copy)]
+pub struct EvaluationEnv<'a> {
+    pub salt: &'a str,
+    pub segments: &'a SegmentSet,
+}
+
+impl<'a> EvaluationEnv<'a> {
+    /// An environment that defines no segments. Any rule referencing one will
+    /// simply not match, per [`crate::matcher::in_segment`].
+    pub fn new(salt: &'a str) -> Self {
+        static EMPTY: OnceLock<SegmentSet> = OnceLock::new();
+        Self { salt, segments: EMPTY.get_or_init(SegmentSet::new) }
+    }
+
+    pub fn with_segments(salt: &'a str, segments: &'a SegmentSet) -> Self {
+        Self { salt, segments }
+    }
+}
 
 /// Why the engine served what it served.
 ///
@@ -73,23 +102,23 @@ impl Evaluation {
     }
 }
 
-/// Evaluates `flag` for `ctx` under the environment's `salt`.
-pub fn evaluate(flag: &Flag, ctx: &EvaluationContext, salt: &str) -> Evaluation {
+/// Evaluates `flag` for `ctx` in `env`.
+pub fn evaluate(flag: &Flag, ctx: &EvaluationContext, env: &EvaluationEnv<'_>) -> Evaluation {
     if !flag.enabled {
         return serve(flag, &flag.off_variant, Reason::Off);
     }
 
     for (index, rule) in flag.rules.iter().enumerate() {
-        if rule_matches(rule, ctx) {
+        if rule_matches(rule, ctx, env) {
             let reason = Reason::TargetMatch { rule_id: rule.id, index };
-            return match resolve(flag, &rule.distribution, ctx, salt) {
+            return match resolve(flag, &rule.distribution, ctx, env.salt) {
                 Ok(variant) => serve(flag, &variant, reason),
                 Err(message) => degrade(flag, message),
             };
         }
     }
 
-    match resolve(flag, &flag.fallthrough, ctx, salt) {
+    match resolve(flag, &flag.fallthrough, ctx, env.salt) {
         Ok(variant) => serve(flag, &variant, Reason::Fallthrough),
         Err(message) => degrade(flag, message),
     }
@@ -157,8 +186,12 @@ mod tests {
 
     const SALT: &str = "env-salt";
 
+    fn env() -> EvaluationEnv<'static> {
+        EvaluationEnv::new(SALT)
+    }
+
     fn rule(conditions: Vec<Condition>, distribution: Distribution) -> Rule {
-        Rule { id: Uuid::nil(), description: None, conditions, distribution }
+        Rule::new(Uuid::nil(), conditions, distribution)
     }
 
     #[test]
@@ -167,7 +200,7 @@ mod tests {
             .with_rules(vec![rule(vec![], Distribution::fixed("on"))])
             .enabled(false);
 
-        let out = evaluate(&flag, &EvaluationContext::new("u"), SALT);
+        let out = evaluate(&flag, &EvaluationContext::new("u"), &env());
         assert_eq!(out.reason, Reason::Off);
         assert!(!out.is_on());
     }
@@ -175,7 +208,7 @@ mod tests {
     #[test]
     fn an_enabled_flag_without_rules_falls_through() {
         let flag = Flag::boolean("f").enabled(true);
-        let out = evaluate(&flag, &EvaluationContext::new("u"), SALT);
+        let out = evaluate(&flag, &EvaluationContext::new("u"), &env());
         assert_eq!(out.reason, Reason::Fallthrough);
         assert!(out.is_on());
     }
@@ -195,12 +228,14 @@ mod tests {
                     id: first,
                     description: None,
                     conditions: vec![Condition::new("plan", Operator::In, vec!["pro".into()])],
+                    segments: None,
                     distribution: Distribution::fixed("a"),
                 },
                 Rule {
                     id: second,
                     description: None,
                     conditions: vec![],
+                    segments: None,
                     distribution: Distribution::fixed("b"),
                 },
             ],
@@ -208,12 +243,12 @@ mod tests {
         };
 
         let pro = EvaluationContext::new("u").with("plan", "pro");
-        let out = evaluate(&flag, &pro, SALT);
+        let out = evaluate(&flag, &pro, &env());
         assert_eq!(out.variant.as_deref(), Some("a"));
         assert_eq!(out.reason, Reason::TargetMatch { rule_id: first, index: 0 });
 
         let free = EvaluationContext::new("u").with("plan", "free");
-        let out = evaluate(&flag, &free, SALT);
+        let out = evaluate(&flag, &free, &env());
         assert_eq!(out.variant.as_deref(), Some("b"));
         assert_eq!(out.reason, Reason::TargetMatch { rule_id: second, index: 1 });
     }
@@ -232,9 +267,9 @@ mod tests {
         };
 
         let ctx = EvaluationContext::new("user-42");
-        let first = evaluate(&flag, &ctx, SALT);
+        let first = evaluate(&flag, &ctx, &env());
         for _ in 0..50 {
-            assert_eq!(evaluate(&flag, &ctx, SALT).variant, first.variant);
+            assert_eq!(evaluate(&flag, &ctx, &env()).variant, first.variant);
         }
     }
 
@@ -252,7 +287,7 @@ mod tests {
         };
 
         let on = (0..10_000)
-            .filter(|i| evaluate(&flag, &EvaluationContext::new(format!("u-{i}")), SALT).is_on())
+            .filter(|i| evaluate(&flag, &EvaluationContext::new(format!("u-{i}")), &env()).is_on())
             .count();
         assert!((4_800..5_200).contains(&on), "expected ~5000 enabled, got {on}");
     }
@@ -273,7 +308,7 @@ mod tests {
         let decisions: Vec<_> = (0..25)
             .map(|i| {
                 let ctx = EvaluationContext::new(format!("user-{i}")).with("account_id", "acme");
-                evaluate(&flag, &ctx, SALT).is_on()
+                evaluate(&flag, &ctx, &env()).is_on()
             })
             .collect();
 
@@ -293,7 +328,7 @@ mod tests {
             ..Flag::boolean("f").enabled(true)
         };
 
-        let out = evaluate(&flag, &EvaluationContext::new("u"), SALT);
+        let out = evaluate(&flag, &EvaluationContext::new("u"), &env());
         assert!(matches!(out.reason, Reason::Error { .. }));
         // Degrading to the off value is what keeps a bad context from turning
         // a half-built feature on.
@@ -304,7 +339,7 @@ mod tests {
     fn an_unknown_variant_degrades_instead_of_panicking() {
         let flag =
             Flag { fallthrough: Distribution::fixed("ghost"), ..Flag::boolean("f").enabled(true) };
-        let out = evaluate(&flag, &EvaluationContext::new("u"), SALT);
+        let out = evaluate(&flag, &EvaluationContext::new("u"), &env());
         assert!(matches!(out.reason, Reason::Error { .. }));
         assert_eq!(out.variant, None);
         assert!(!out.is_on());
@@ -326,8 +361,8 @@ mod tests {
         let moved = (0..500)
             .filter(|i| {
                 let ctx = EvaluationContext::new(format!("u-{i}"));
-                evaluate(&flag, &ctx, "staging").is_on()
-                    != evaluate(&flag, &ctx, "production").is_on()
+                evaluate(&flag, &ctx, &EvaluationEnv::new("staging")).is_on()
+                    != evaluate(&flag, &ctx, &EvaluationEnv::new("production")).is_on()
             })
             .count();
         assert!((200..300).contains(&moved), "expected ~half to move, got {moved}");

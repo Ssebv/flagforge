@@ -218,6 +218,85 @@ async fn local_and_remote_evaluation_agree_on_every_user(pool: PgPool) {
     );
 }
 
+/// Segments are resolved by the client, from data the client has to have been
+/// given. A snapshot shipping the rules but not the segments would make every
+/// segment reference match nobody — and report it as an ordinary fallthrough,
+/// so nothing would look broken locally while the server said otherwise.
+#[sqlx::test(migrations = "../../migrations")]
+async fn local_and_remote_agree_on_flags_gated_by_a_segment(pool: PgPool) {
+    let address = serve(pool).await;
+    let fixture = Fixture::create(address).await;
+
+    fixture
+        .post(
+            "/api/v1/projects/checkout/environments/production/segments",
+            json!({"key": "enterprise-canary", "name": "Enterprise canary"}),
+        )
+        .await;
+
+    // Membership needs a condition *and* a rollout, so a client that got the
+    // segment but bucketed it differently fails just as loudly as one that
+    // never got it.
+    fixture
+        .put(
+            "/api/v1/projects/checkout/environments/production/segments/enterprise-canary",
+            json!({
+                "rules": [{
+                    "id": "33333333-3333-3333-3333-333333333333",
+                    "conditions": [
+                        {"attribute": "plan", "operator": "in", "values": ["enterprise", "free"]},
+                    ],
+                    "rollout": {"percentage": 40_000},
+                }],
+            }),
+        )
+        .await;
+
+    fixture
+        .put(
+            "/api/v1/projects/checkout/environments/production/flags/checkout.v2",
+            json!({
+                "enabled": true,
+                "off_variant": "off",
+                "fallthrough": {"kind": "fixed", "variant": "off"},
+                "rules": [{
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "conditions": [],
+                    "segments": {"any_of": ["enterprise-canary"]},
+                    "distribution": {"kind": "fixed", "variant": "on"},
+                }],
+            }),
+        )
+        .await;
+
+    let client = Client::builder(&fixture.base, &fixture.sdk_key)
+        .poll_interval(Duration::ZERO)
+        .connect()
+        .await
+        .expect("the SDK should load a snapshot from a server-scoped key");
+
+    let mut members = 0;
+    for i in 0..200 {
+        let context = context(i);
+        let local = client.is_enabled("checkout.v2", &context, false);
+        let remote = fixture.evaluate_remotely("checkout.v2", &context).await;
+
+        assert_eq!(
+            local, remote,
+            "user-{i} got {local} locally and {remote} from the server — the snapshot is missing \
+             the segment, or the client buckets its cohort differently"
+        );
+        members += u32::from(local);
+    }
+
+    // Roughly the 40 % cohort. Wide bounds, but an empty or universal cohort —
+    // the two ways this silently breaks — still fails.
+    assert!(
+        (50..=130).contains(&members),
+        "expected roughly 40% of 200 users in the cohort, got {members}"
+    );
+}
+
 #[sqlx::test(migrations = "../../migrations")]
 async fn the_sdk_sees_a_change_after_refreshing(pool: PgPool) {
     let address = serve(pool).await;

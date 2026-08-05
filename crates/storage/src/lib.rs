@@ -26,6 +26,7 @@ pub mod models;
 pub mod notify;
 pub mod pool;
 pub mod projects;
+pub mod segments;
 pub mod snapshot;
 
 pub use error::{Result, StorageError};

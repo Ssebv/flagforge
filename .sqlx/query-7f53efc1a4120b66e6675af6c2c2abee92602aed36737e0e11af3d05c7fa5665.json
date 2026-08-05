@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT f.key\n        FROM flag_configs c\n        JOIN flags f ON f.id = c.flag_id\n        WHERE c.environment_id = $1 AND (c.rules @> $2::JSONB OR c.rules @> $3::JSONB)\n        ORDER BY f.key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flags",
+            "name": "key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7f53efc1a4120b66e6675af6c2c2abee92602aed36737e0e11af3d05c7fa5665"
+}

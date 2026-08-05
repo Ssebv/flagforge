@@ -1,0 +1,156 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE segments\n        SET name        = COALESCE($3, name),\n            description = CASE WHEN $4 THEN $5 ELSE description END,\n            included    = COALESCE($6, included),\n            excluded    = COALESCE($7, excluded),\n            rules       = COALESCE($8, rules)\n        WHERE environment_id = $1 AND key = $2 AND ($9::BIGINT IS NULL OR version = $9)\n        RETURNING id, environment_id, key, name, description, included, excluded, rules,\n                  version, created_at, updated_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "environment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "environment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "included",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "included"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "excluded",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "excluded"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "rules",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "rules"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "segments",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d46451c99c8e64353f3776ef9c8d2265fcb6d9a1cfab3ec502b6628f431903fd"
+}

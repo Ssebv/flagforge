@@ -133,6 +133,13 @@ pub struct SnapshotResponse {
     /// answer plausible, half of them wrong, and nothing to indicate it.
     pub salt: String,
     pub flags: std::collections::BTreeMap<String, flagforge_core::Flag>,
+    /// The audiences the flags' rules reference.
+    ///
+    /// Shipped for the same reason as the salt: an SDK holding the rules but
+    /// not the segments would resolve every segment reference to "nobody" and
+    /// report it as an ordinary fallthrough — plausible answers, silently
+    /// disagreeing with the server.
+    pub segments: flagforge_core::SegmentSet,
     pub version: i64,
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -177,6 +184,7 @@ pub async fn snapshot(
         environment_key: snapshot.environment_key.clone(),
         salt: snapshot.salt.clone(),
         flags: snapshot.flags.clone(),
+        segments: snapshot.segments.clone(),
         version: snapshot.version,
         generated_at: snapshot.generated_at,
     }))
