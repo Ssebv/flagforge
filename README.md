@@ -573,7 +573,7 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**206 tests**, in four layers:
+**208 tests**, in four layers:
 
 - **Domain (72).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
@@ -584,7 +584,7 @@ cargo test --workspace        # needs DATABASE_URL for the integration suite
   OpenAPI generation (including a check that the domain and storage `Flag` and
   `Segment` types do not collide into one schema — utoipa keys schemas by type
   name).
-- **Integration (52).** `#[sqlx::test]` gives each test its own freshly
+- **Integration (54).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`. Includes the ones a
   public deployment rests on: that the seed is a no-op the second time, and
@@ -687,6 +687,12 @@ would let the first visitor delete the project the demo consists of — and
 `crates/api/tests/demo.rs` holds that line, asserting a 403 on configuring a
 flag, editing a segment, creating a flag, minting an SDK key and deleting the
 project.
+
+**The owner's password is generated when `APP_ENV=production`**, and printed
+once by the release command. The development default a few lines above is in
+this README, which is exactly why a deployment must not use it: publishing a
+repository would otherwise publish its demo's administrator. Pass `--password`
+to pin one yourself.
 
 ---
 
