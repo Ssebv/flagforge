@@ -20,6 +20,7 @@ use flagforge_storage::{PgPool, accounts, api_keys, audit, flags, projects, segm
 use uuid::Uuid;
 
 use crate::auth::{keys, password};
+use crate::config::RuntimeEnvironment;
 use crate::routes::new_salt;
 
 /// The one demo segment, referenced by a flag rule below.
@@ -36,7 +37,9 @@ const VIEWER_PASSWORD: &str = "read-only-demo-account";
 
 pub struct Credentials {
     pub email: String,
-    pub password: String,
+    /// `None` means "decide for me": the documented default in development,
+    /// and a generated one in production. See [`resolve_password`].
+    pub password: Option<String>,
     /// Treat an already-seeded database as success rather than as an error.
     ///
     /// This is what makes seeding possible on a deployment at all: the runtime
@@ -48,16 +51,39 @@ pub struct Credentials {
 
 impl Default for Credentials {
     fn default() -> Self {
-        Self {
-            email: "ada@acme.test".to_owned(),
-            password: "correct-horse-battery-staple".to_owned(),
-            if_empty: false,
-        }
+        Self { email: "ada@acme.test".to_owned(), password: None, if_empty: false }
+    }
+}
+
+/// The owner password used when none is supplied, in development only.
+///
+/// Documented in the README, which is exactly why it must never reach a
+/// deployment: anyone reading the repository would hold the demo's
+/// administrator credentials.
+pub const DEV_OWNER_PASSWORD: &str = "correct-horse-battery-staple";
+
+/// Picks the owner password when the caller did not.
+///
+/// A well-known password is a convenience locally and a hole in production —
+/// the same reasoning that makes a short `JWT_SECRET` a refusal to boot rather
+/// than a warning. Generating one keeps the deploy working (the release
+/// command cannot prompt) while making the credential unguessable; it is
+/// printed, and in a deployment that print lands in logs only the operator can
+/// read.
+fn resolve_password(supplied: Option<String>, environment: RuntimeEnvironment) -> (String, bool) {
+    match (supplied, environment) {
+        (Some(password), _) => (password, false),
+        (None, RuntimeEnvironment::Development) => (DEV_OWNER_PASSWORD.to_owned(), false),
+        (None, RuntimeEnvironment::Production) => (new_salt(), true),
     }
 }
 
 /// Populates an empty database and prints what was created.
-pub async fn run(pool: &PgPool, credentials: Credentials) -> anyhow::Result<()> {
+pub async fn run(
+    pool: &PgPool,
+    credentials: Credentials,
+    environment: RuntimeEnvironment,
+) -> anyhow::Result<()> {
     if accounts::find_by_email(pool, &credentials.email).await?.is_some() {
         if credentials.if_empty {
             tracing::info!(email = %credentials.email, "already seeded; leaving it alone");
@@ -70,7 +96,8 @@ pub async fn run(pool: &PgPool, credentials: Credentials) -> anyhow::Result<()> 
         );
     }
 
-    let hash = password::hash(&credentials.password)
+    let (owner_password, generated) = resolve_password(credentials.password, environment);
+    let hash = password::hash(&owner_password)
         .map_err(|e| anyhow::anyhow!("could not hash the demo password: {e}"))?;
 
     let (organization, user) = accounts::create_organization_with_owner(
@@ -240,15 +267,20 @@ pub async fn run(pool: &PgPool, credentials: Credentials) -> anyhow::Result<()> 
         secrets.push((environment.key.clone(), generated.secret));
     }
 
-    report(&credentials, &secrets);
+    report(&credentials.email, &owner_password, generated, &secrets);
     Ok(())
 }
 
-fn report(credentials: &Credentials, secrets: &[(String, String)]) {
+fn report(email: &str, owner_password: &str, generated: bool, secrets: &[(String, String)]) {
     println!("\nSeeded a demo organization.\n");
     println!("  Sign in at /");
-    println!("    email     {}", credentials.email);
-    println!("    password  {}", credentials.password);
+    println!("    email     {email}");
+    println!("    password  {owner_password}");
+    if generated {
+        println!("    ^ generated, and shown only here — the documented default");
+        println!("      would have handed this deployment's admin to anyone who");
+        println!("      read the README.");
+    }
     println!("\n  Read-only account, safe to publish alongside a live demo:");
     println!("    email     {VIEWER_EMAIL}");
     println!("    password  {VIEWER_PASSWORD}");

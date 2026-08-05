@@ -35,7 +35,8 @@ fn parse_command() -> anyhow::Result<Command> {
                         credentials.email = args.next().context("--email needs a value")?;
                     }
                     "--password" => {
-                        credentials.password = args.next().context("--password needs a value")?;
+                        credentials.password =
+                            Some(args.next().context("--password needs a value")?);
                     }
                     "--if-empty" => credentials.if_empty = true,
                     other => anyhow::bail!("unknown option `{other}` for `seed`"),
@@ -60,7 +61,10 @@ USAGE:
 
 SEED OPTIONS:
     --email <EMAIL>                   Owner address    [default: ada@acme.test]
-    --password <PASSWORD>             Owner password   [default: correct-horse-battery-staple]
+    --password <PASSWORD>             Owner password. Defaults to a documented
+                                      one in development and a generated one in
+                                      production, where publishing it would hand
+                                      over the deployment
     --if-empty                        Succeed quietly if the database already has
                                       that owner, so this can run on every deploy
 
@@ -102,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Command::Seed(credentials) = command {
-        return flagforge_api::seed::run(&pool, credentials).await;
+        return flagforge_api::seed::run(&pool, credentials, config.environment).await;
     }
 
     let database_url = config.database.url.clone();

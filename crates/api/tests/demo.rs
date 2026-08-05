@@ -7,7 +7,8 @@
 mod harness;
 
 use axum::http::StatusCode;
-use flagforge_api::seed::{self, Credentials};
+use flagforge_api::config::RuntimeEnvironment;
+use flagforge_api::seed::{self, Credentials, DEV_OWNER_PASSWORD};
 use harness::{TestApp, simple_config};
 use serde_json::json;
 use sqlx::PgPool;
@@ -28,8 +29,12 @@ async fn sign_in(app: &TestApp, email: &str, password: &str) -> String {
 async fn seeding_twice_with_if_empty_is_a_no_op(pool: PgPool) {
     let again = || Credentials { if_empty: true, ..Credentials::default() };
 
-    seed::run(&pool, again()).await.expect("the first seed should populate");
-    seed::run(&pool, again()).await.expect("the second seed should be a quiet no-op");
+    seed::run(&pool, again(), RuntimeEnvironment::Development)
+        .await
+        .expect("the first seed should populate");
+    seed::run(&pool, again(), RuntimeEnvironment::Development)
+        .await
+        .expect("the second seed should be a quiet no-op");
 
     let organizations: i64 =
         sqlx::query_scalar("SELECT count(*) FROM organizations").fetch_one(&pool).await.unwrap();
@@ -40,15 +45,17 @@ async fn seeding_twice_with_if_empty_is_a_no_op(pool: PgPool) {
 /// has data by hand is almost always a mistake.
 #[sqlx::test(migrations = "../../migrations")]
 async fn seeding_twice_without_the_flag_still_refuses(pool: PgPool) {
-    seed::run(&pool, Credentials::default()).await.unwrap();
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development).await.unwrap();
 
-    let error = seed::run(&pool, Credentials::default()).await.unwrap_err();
+    let error = seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development)
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("already exists"), "{error}");
 }
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn the_demo_viewer_can_read_production(pool: PgPool) {
-    seed::run(&pool, Credentials::default()).await.unwrap();
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development).await.unwrap();
     let app = TestApp::new(pool);
     let token = sign_in(&app, VIEWER.0, VIEWER.1).await;
 
@@ -73,7 +80,7 @@ async fn the_demo_viewer_can_read_production(pool: PgPool) {
 /// able to turn a flag off, edit an audience, or delete the project.
 #[sqlx::test(migrations = "../../migrations")]
 async fn the_demo_viewer_cannot_change_anything(pool: PgPool) {
-    seed::run(&pool, Credentials::default()).await.unwrap();
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development).await.unwrap();
     let app = TestApp::new(pool);
     let token = sign_in(&app, VIEWER.0, VIEWER.1).await;
 
@@ -106,7 +113,7 @@ async fn the_demo_viewer_cannot_change_anything(pool: PgPool) {
 /// outlives the session that made it.
 #[sqlx::test(migrations = "../../migrations")]
 async fn the_demo_viewer_cannot_mint_an_sdk_key(pool: PgPool) {
-    seed::run(&pool, Credentials::default()).await.unwrap();
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development).await.unwrap();
     let app = TestApp::new(pool);
     let token = sign_in(&app, VIEWER.0, VIEWER.1).await;
 
@@ -123,12 +130,48 @@ async fn the_demo_viewer_cannot_mint_an_sdk_key(pool: PgPool) {
 /// The owner still works — the viewer is an addition, not a replacement.
 #[sqlx::test(migrations = "../../migrations")]
 async fn the_seeded_owner_can_still_write(pool: PgPool) {
-    let credentials = Credentials::default();
-    let (email, password) = (credentials.email.clone(), credentials.password.clone());
-    seed::run(&pool, credentials).await.unwrap();
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Development).await.unwrap();
 
     let app = TestApp::new(pool);
-    let token = sign_in(&app, &email, &password).await;
+    let token = sign_in(&app, "ada@acme.test", DEV_OWNER_PASSWORD).await;
 
     app.configure(&token, "checkout.v2", simple_config(false, "off")).await.expect(StatusCode::OK);
+}
+
+/// The trap this closes: the development owner password is printed in the
+/// README, so a deployment seeded with it hands its administrator account to
+/// anyone who reads the repository — defeating the read-only viewer entirely.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_production_seed_does_not_use_the_documented_password(pool: PgPool) {
+    seed::run(&pool, Credentials::default(), RuntimeEnvironment::Production).await.unwrap();
+
+    let app = TestApp::new(pool);
+    let refused = app
+        .post(
+            "/api/v1/auth/login",
+            None,
+            json!({"email": "ada@acme.test", "password": DEV_OWNER_PASSWORD}),
+        )
+        .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNAUTHORIZED,
+        "the README's password opened a production deployment: {}",
+        refused.body
+    );
+
+    // The viewer is still the published, working login.
+    sign_in(&app, VIEWER.0, VIEWER.1).await;
+}
+
+/// An explicit password is still honoured everywhere, so an operator who wants
+/// to pin one can.
+#[sqlx::test(migrations = "../../migrations")]
+async fn an_explicit_password_is_used_even_in_production(pool: PgPool) {
+    let chosen = "a-password-the-operator-picked";
+    let credentials = Credentials { password: Some(chosen.to_owned()), ..Credentials::default() };
+    seed::run(&pool, credentials, RuntimeEnvironment::Production).await.unwrap();
+
+    let app = TestApp::new(pool);
+    sign_in(&app, "ada@acme.test", chosen).await;
 }
