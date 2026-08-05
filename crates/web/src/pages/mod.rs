@@ -1,11 +1,12 @@
 //! Route views.
 
 mod audit;
-mod flag;
+pub(crate) mod flag;
 mod keys;
 mod login;
 mod project;
 mod projects;
+mod segments;
 
 pub use audit::Audit;
 pub use flag::FlagDetail;
@@ -13,6 +14,7 @@ pub use keys::Keys;
 pub use login::Login;
 pub use project::ProjectDetail;
 pub use projects::Projects;
+pub use segments::Segments;
 
 /// Shared key suggestion, so a project, environment and flag all propose keys
 /// the API will accept in exactly the same way.
