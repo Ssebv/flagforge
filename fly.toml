@@ -6,11 +6,14 @@
 #   fly secrets set JWT_SECRET="$(openssl rand -base64 48)"
 #   fly deploy
 
-# App names are unique across the whole of Fly, not just your account, so this
-# generic one is likely taken — `fly launch` will say so, and the fix is to
-# change it here (e.g. `flagforge-<yourhandle>`). Nothing else refers to it.
+# App names are unique across the whole of Fly, not just your account. This one
+# is taken — by this deployment — so a fork has to change it here before
+# `fly deploy`. Nothing else refers to it.
 app = "flagforge"
-primary_region = "mad"
+
+# Fly retired several regions, `mad` among them; `fly platform regions` is the
+# list that is actually accepted, and `cdg` is what is left nearest Madrid.
+primary_region = "cdg"
 
 [build]
   dockerfile = "Dockerfile"
