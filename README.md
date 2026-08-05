@@ -584,13 +584,13 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**214 tests**, in four layers:
+**217 tests**, in four layers:
 
 - **Domain (72).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, any full weight partition resolves, and a segment cohort cannot
   alias the flag of the same name.
-- **HTTP unit (74).** Error mapping, token round trips, tampering detection,
+- **HTTP unit (77).** Error mapping, token round trips, tampering detection,
   the rate limiter's refill maths, key generation, usage-write throttling, and
   OpenAPI generation (including a check that the domain and storage `Flag` and
   `Segment` types do not collide into one schema — utoipa keys schemas by type
