@@ -569,7 +569,7 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**200 tests**, in four layers:
+**206 tests**, in four layers:
 
 - **Domain (72).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
@@ -580,9 +580,11 @@ cargo test --workspace        # needs DATABASE_URL for the integration suite
   OpenAPI generation (including a check that the domain and storage `Flag` and
   `Segment` types do not collide into one schema — utoipa keys schemas by type
   name).
-- **Integration (46).** `#[sqlx::test]` gives each test its own freshly
+- **Integration (52).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
-  extractors and all — via `tower::ServiceExt::oneshot`.
+  extractors and all — via `tower::ServiceExt::oneshot`. Includes the ones a
+  public deployment rests on: that the seed is a no-op the second time, and
+  that the published read-only account is refused every write.
 - **SDK (11).** Including the one that matters: a real server on a real socket,
   and 300 users evaluated both locally and remotely to prove the two agree.
 
@@ -652,6 +654,32 @@ Configuration is entirely environment variables (see [`.env.example`](.env.examp
 the server validates all of them at startup and reports *every* problem at
 once, so a misconfigured deploy needs one restart rather than five. A
 `JWT_SECRET` shorter than 32 characters is a refusal to boot, not a warning.
+
+**Seeding happens in the release command**, not by hand:
+
+```toml
+[deploy]
+  release_command = "/app/flagforge seed --if-empty"
+```
+
+That is not a convenience. The runtime image is distroless, so there is no
+shell to `fly ssh console` into and no way to seed a deployed instance
+afterwards — it has to happen on the way in. A release command runs on *every*
+deploy, which is what `--if-empty` is for: the first one populates the
+database, and every one after it is a logged no-op rather than a failed
+deploy.
+
+The seed also creates a **read-only `viewer` account** alongside the owner:
+
+| | |
+| --- | --- |
+| `viewer@acme.test` / `read-only-demo-account` | Sees production exactly as an operator does, and cannot change anything. |
+
+That is the login to publish next to a public demo. Publishing the owner's
+would let the first visitor delete the project the demo consists of — and
+`crates/api/tests/demo.rs` holds that line, asserting a 403 on configuring a
+flag, editing a segment, creating a flag, minting an SDK key and deleting the
+project.
 
 ---
 

@@ -15,7 +15,7 @@ use flagforge_core::{
     AttributeValue, Condition, Distribution, Operator, Rule, SegmentMatch, SegmentRollout,
     SegmentRule, TOTAL_WEIGHT, Variant, WeightedVariant,
 };
-use flagforge_storage::models::{KeyScope, NewAuditEntry};
+use flagforge_storage::models::{KeyScope, NewAuditEntry, Role};
 use flagforge_storage::{PgPool, accounts, api_keys, audit, flags, projects, segments};
 use uuid::Uuid;
 
@@ -25,9 +25,25 @@ use crate::routes::new_salt;
 /// The one demo segment, referenced by a flag rule below.
 const BETA_SEGMENT: &str = "beta-testers";
 
+/// The read-only account whose credentials are safe to publish.
+///
+/// A live demo needs a login anyone can use, and publishing the owner's would
+/// let the first visitor delete the project the demo consists of. A `viewer`
+/// sees production exactly as an operator does and cannot change a thing,
+/// which is the whole reason that role exists.
+const VIEWER_EMAIL: &str = "viewer@acme.test";
+const VIEWER_PASSWORD: &str = "read-only-demo-account";
+
 pub struct Credentials {
     pub email: String,
     pub password: String,
+    /// Treat an already-seeded database as success rather than as an error.
+    ///
+    /// This is what makes seeding possible on a deployment at all: the runtime
+    /// image is distroless, so there is no shell to exec into and run this by
+    /// hand. It has to be the release command, and a release command runs on
+    /// *every* deploy — so the second one must not fail the deploy.
+    pub if_empty: bool,
 }
 
 impl Default for Credentials {
@@ -35,6 +51,7 @@ impl Default for Credentials {
         Self {
             email: "ada@acme.test".to_owned(),
             password: "correct-horse-battery-staple".to_owned(),
+            if_empty: false,
         }
     }
 }
@@ -42,9 +59,13 @@ impl Default for Credentials {
 /// Populates an empty database and prints what was created.
 pub async fn run(pool: &PgPool, credentials: Credentials) -> anyhow::Result<()> {
     if accounts::find_by_email(pool, &credentials.email).await?.is_some() {
+        if credentials.if_empty {
+            tracing::info!(email = %credentials.email, "already seeded; leaving it alone");
+            return Ok(());
+        }
         anyhow::bail!(
             "`{}` already exists — seeding twice would create a confusing duplicate. \
-             Drop the database or pass a different --email.",
+             Pass --if-empty to make this a no-op, or drop the database.",
             credentials.email
         );
     }
@@ -58,6 +79,16 @@ pub async fn run(pool: &PgPool, credentials: Credentials) -> anyhow::Result<()> 
         "acme-inc",
         &credentials.email,
         &hash,
+    )
+    .await?;
+
+    accounts::create_user(
+        pool,
+        organization.id,
+        VIEWER_EMAIL,
+        &password::hash(VIEWER_PASSWORD)
+            .map_err(|e| anyhow::anyhow!("could not hash the viewer password: {e}"))?,
+        Role::Viewer,
     )
     .await?;
 
@@ -218,6 +249,9 @@ fn report(credentials: &Credentials, secrets: &[(String, String)]) {
     println!("  Sign in at /");
     println!("    email     {}", credentials.email);
     println!("    password  {}", credentials.password);
+    println!("\n  Read-only account, safe to publish alongside a live demo:");
+    println!("    email     {VIEWER_EMAIL}");
+    println!("    password  {VIEWER_PASSWORD}");
     println!("\n  SDK keys (shown once — only their hashes are stored):");
     for (environment, secret) in secrets {
         println!("    {environment:<12} {secret}");

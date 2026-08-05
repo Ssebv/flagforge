@@ -12,6 +12,14 @@ primary_region = "mad"
 [build]
   dockerfile = "Dockerfile"
 
+# Migrations and demo data, before any new machine takes traffic.
+#
+# The runtime image is distroless — no shell — so there is no `fly ssh console`
+# to seed by hand; it has to happen here. `--if-empty` is what makes that safe
+# to run on every deploy rather than only the first.
+[deploy]
+  release_command = "/app/flagforge seed --if-empty"
+
 [env]
   APP_ENV = "production"
   PORT = "8080"
