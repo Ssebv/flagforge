@@ -10,14 +10,10 @@ from the same codebase.
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![No JavaScript build](https://img.shields.io/badge/frontend-Leptos%20%2F%20WASM-orange.svg)
 
-**[Live demo →](https://flagforge.fly.dev)** — sign in as `viewer@acme.test`
-with `read-only-demo-account`. Read-only on purpose: the account can see
-production exactly as an operator does and cannot change a thing.
-
-To *edit* something, register your own organization from the same screen. It is
-a multi-tenant service isolated at the query level, so your flags and the demo's
-never see each other — which is the honest way to let a stranger try the rule
-editor without handing them the demo.
+**Run it in two commands** — `docker compose up --build`, then
+`docker compose exec api /app/flagforge seed`. That brings up Postgres, the API
+and the dashboard with a realistic organization already in it; the seed prints
+the sign-in details. Screenshots below are from exactly that.
 
 ![The flag list](docs/screenshots/flags-light.png)
 
