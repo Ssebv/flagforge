@@ -580,7 +580,9 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**219 tests**, in four layers:
+**219 tests**, in four layers — plus a CI job that runs the quick start above
+and checks what it promises, because it was once broken while every other
+check stayed green:
 
 - **Domain (74).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
