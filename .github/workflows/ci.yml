@@ -184,6 +184,63 @@ jobs:
           [ "$flags" -ge 5 ] \
             || { echo "::error::the seed produced $flags flags"; exit 1; }
 
+      # The tour is the second thing a reader does, and it is prose: the
+      # integration suite proves the *API* works, but nothing proves the
+      # commands printed in the README still match it. A renamed field would
+      # leave every test green and the documentation wrong.
+      - name: The five-minute tour still runs
+        run: |
+          set -euo pipefail
+          BASE=http://localhost:8080
+
+          TOKEN=$(curl -sf -X POST $BASE/api/v1/auth/register \
+            -H 'content-type: application/json' \
+            -d '{"organization_name":"Tour Inc","email":"tour@acme.test","password":"correct-horse-battery-staple"}' \
+            | jq -r .token)
+          AUTH="authorization: Bearer $TOKEN"
+
+          curl -sf -X POST $BASE/api/v1/projects -H "$AUTH" -H 'content-type: application/json' \
+            -d '{"key":"checkout","name":"Checkout"}' > /dev/null
+          curl -sf -X POST $BASE/api/v1/projects/checkout/environments -H "$AUTH" -H 'content-type: application/json' \
+            -d '{"key":"production","name":"Production","is_production":true}' > /dev/null
+          curl -sf -X POST $BASE/api/v1/projects/checkout/flags -H "$AUTH" -H 'content-type: application/json' \
+            -d '{"key":"checkout.v2","name":"New checkout"}' > /dev/null
+
+          curl -sf -X POST $BASE/api/v1/projects/checkout/environments/production/segments \
+            -H "$AUTH" -H 'content-type: application/json' \
+            -d '{"key":"beta-testers","name":"Beta testers"}' > /dev/null
+          curl -sf -X PUT $BASE/api/v1/projects/checkout/environments/production/segments/beta-testers \
+            -H "$AUTH" -H 'content-type: application/json' -d '{
+            "included": ["user-42", "user-7"],
+            "rules": [{
+              "id": "00000000-0000-0000-0000-000000000001",
+              "conditions": [{"attribute": "plan", "operator": "in", "values": ["enterprise"]}],
+              "rollout": {"percentage": 20000}
+            }]
+          }' > /dev/null
+
+          SDK=$(curl -sf -X POST $BASE/api/v1/projects/checkout/environments/production/keys \
+            -H "$AUTH" -H 'content-type: application/json' \
+            -d '{"name":"backend","scope":"server"}' | jq -r .secret)
+
+          curl -sf -X PUT $BASE/api/v1/projects/checkout/environments/production/flags/checkout.v2 \
+            -H "$AUTH" -H 'content-type: application/json' -d '{
+            "enabled": true, "off_variant": "off",
+            "fallthrough": {"kind":"rollout","weights":[{"variant":"on","weight":20000},{"variant":"off","weight":80000}]},
+            "rules": [
+              {"id":"11111111-1111-1111-1111-111111111111","description":"The beta cohort, whoever is in it today","segments":{"any_of":["beta-testers"]},"distribution":{"kind":"fixed","variant":"on"}},
+              {"id":"22222222-2222-2222-2222-222222222222","description":"Paid plans get it immediately","conditions":[{"attribute":"plan","operator":"in","values":["pro","enterprise"]}],"distribution":{"kind":"fixed","variant":"on"}}
+            ]
+          }' > /dev/null
+
+          # The README's own claim: user-42 is in the cohort, with no plan at
+          # all, and is served by the segment rule.
+          value=$(curl -sf -X POST $BASE/api/v1/evaluate/checkout.v2 \
+            -H "authorization: Bearer $SDK" -H 'content-type: application/json' \
+            -d '{"context":{"key":"user-42"}}' | jq -r .value)
+          [ "$value" = true ] \
+            || { echo "::error::the tour's segment rule did not serve user-42 ($value)"; exit 1; }
+
       - name: Logs on failure
         if: failure()
         run: docker compose logs
