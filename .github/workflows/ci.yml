@@ -135,6 +135,59 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  compose:
+    name: Quick start
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Exactly the two commands the README opens with, on a machine that has
+      # never run them. This job exists because they were broken on `main` and
+      # nothing noticed: the Docker job builds the image and wires it to a
+      # Postgres by hand, which never touches docker-compose.yml — so a volume
+      # mounted where Postgres 18 refuses to start shipped, and sat there.
+      - name: docker compose up
+        run: |
+          docker compose up --build -d
+          for i in $(seq 1 45); do
+            curl -sf http://localhost:8080/health/ready && break
+            sleep 2
+          done
+          curl -sf http://localhost:8080/health/ready || {
+            echo "::error::the quick start in the README does not work"
+            docker compose ps
+            docker compose logs
+            exit 1
+          }
+
+      - name: docker compose exec api /app/flagforge seed
+        run: docker compose exec -T api /app/flagforge seed
+
+      # The dashboard is embedded in the binary, and the seeded read-only
+      # account is what the README tells a reader to sign in with. Both are
+      # claims the quick start makes, so both get checked.
+      - name: The dashboard serves and the seeded account works
+        run: |
+          curl -sf http://localhost:8080/ | grep -q "<title>" \
+            || { echo "::error::no dashboard at /"; exit 1; }
+
+          token=$(curl -sf -X POST http://localhost:8080/api/v1/auth/login \
+            -H 'content-type: application/json' \
+            -d '{"email":"viewer@acme.test","password":"read-only-demo-account"}' \
+            | jq -r .token)
+          [ -n "$token" ] && [ "$token" != null ] \
+            || { echo "::error::the published demo account cannot sign in"; exit 1; }
+
+          flags=$(curl -sf http://localhost:8080/api/v1/projects/checkout/environments/production/flags \
+            -H "authorization: Bearer $token" | jq length)
+          [ "$flags" -ge 5 ] \
+            || { echo "::error::the seed produced $flags flags"; exit 1; }
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
   docker:
     name: Docker image
     runs-on: ubuntu-latest
