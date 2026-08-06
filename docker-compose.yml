@@ -10,7 +10,12 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # `/var/lib/postgresql`, not `/data` underneath it. The 18 images put the
+      # cluster in a version-specific subdirectory so `pg_upgrade` can work
+      # across a single mount, and they refuse to start at all when they find a
+      # mount at the old path — even an empty one, which is what made this fail
+      # on a clean checkout rather than only on an upgrade.
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U flagforge -d flagforge"]
       interval: 2s
