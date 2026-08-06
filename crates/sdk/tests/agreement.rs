@@ -27,7 +27,12 @@ async fn serve(pool: PgPool) -> SocketAddr {
             body_limit_bytes: 256 * 1024,
             shutdown_grace: Duration::from_secs(1),
         },
-        database: DatabaseConfig { url: String::new(), max_connections: 5, auto_migrate: false },
+        database: DatabaseConfig {
+            url: String::new(),
+            max_connections: 5,
+            auto_migrate: false,
+            startup_timeout: Duration::from_secs(5),
+        },
         auth: AuthConfig {
             jwt_secret: "test-secret-long-enough-to-pass-validation".into(),
             token_ttl: Duration::from_secs(3600),

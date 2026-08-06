@@ -69,6 +69,7 @@ impl TestApp {
                 url: String::new(),
                 max_connections: 5,
                 auto_migrate: false,
+                startup_timeout: Duration::from_secs(5),
             },
             auth: AuthConfig {
                 jwt_secret: "test-secret-long-enough-to-pass-validation".into(),

@@ -95,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut pool_config = PoolConfig::new(&config.database.url);
     pool_config.max_connections = config.database.max_connections;
+    pool_config.startup_timeout = config.database.startup_timeout;
 
     let pool = flagforge_storage::connect(&pool_config)
         .await
