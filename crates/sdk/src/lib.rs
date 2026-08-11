@@ -40,6 +40,7 @@
 
 mod client;
 mod error;
+mod events;
 
 pub use client::{Client, ClientBuilder, Snapshot};
 pub use error::Error;

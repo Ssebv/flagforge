@@ -8,6 +8,7 @@ use flagforge_core::{EnvironmentSnapshot, Evaluation, EvaluationContext, Variant
 use tokio::task::JoinHandle;
 
 use crate::error::Error;
+use crate::events::{Cell, EventKind, EventPayload, Recorder};
 
 /// How often the configuration is re-fetched by default.
 ///
@@ -17,6 +18,12 @@ use crate::error::Error;
 /// [`Client::refresh`] wired to your own signal.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often accumulated experiment events are shipped by default. Faster than
+/// the poll: counters are tiny, and a short interval keeps a deploy's final
+/// unflushed window small.
+const DEFAULT_EVENT_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
+/// The server refuses batches above this; the flusher chunks to it.
+const MAX_EVENTS_PER_BATCH: usize = 1_000;
 /// Backoff cap for a server that is down; low enough to recover promptly,
 /// high enough not to add load to something already struggling.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -28,10 +35,13 @@ pub type Snapshot = EnvironmentSnapshot;
 struct Inner {
     http: reqwest::Client,
     url: String,
+    events_url: String,
     key: String,
     /// `None` until the first successful fetch. Lock-free to read, because
     /// every flag check reads it.
     current: ArcSwapOption<Snapshot>,
+    /// Experiment exposures and conversions waiting for the next flush.
+    recorder: Recorder,
 }
 
 impl Inner {
@@ -61,6 +71,68 @@ impl Inner {
     fn store(&self, snapshot: Snapshot) {
         self.current.store(Some(Arc::new(snapshot)));
     }
+
+    /// Ships accumulated event counts, in server-sized chunks.
+    ///
+    /// On any failure the unsent counts go back into the recorder, so the next
+    /// flush retries them merged with whatever arrived in between — an outage
+    /// delays counters, it does not lose them (until the process exits).
+    async fn flush_events(&self) -> Result<(), Error> {
+        let (counts, dropped) = self.recorder.drain();
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "flagforge: experiment events dropped by the in-process cell cap"
+            );
+        }
+        if counts.is_empty() {
+            return Ok(());
+        }
+
+        let cells: Vec<(Cell, u64)> = counts.into_iter().collect();
+        for start in (0..cells.len()).step_by(MAX_EVENTS_PER_BATCH) {
+            let chunk = &cells[start..(start + MAX_EVENTS_PER_BATCH).min(cells.len())];
+            let events: Vec<EventPayload<'_>> = chunk
+                .iter()
+                .map(|(cell, count)| EventPayload {
+                    experiment_key: &cell.experiment_key,
+                    variant: &cell.variant,
+                    kind: cell.kind,
+                    // Saturating: 4 billion identical events between two
+                    // flushes is not a workload, it is a bug elsewhere.
+                    count: u32::try_from(*count).unwrap_or(u32::MAX),
+                })
+                .collect();
+
+            if let Err(error) = self.post_events(&events).await {
+                self.recorder.restore(cells[start..].iter().cloned().collect());
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    async fn post_events(&self, events: &[EventPayload<'_>]) -> Result<(), Error> {
+        let response = self
+            .http
+            .post(&self.events_url)
+            .header("authorization", format!("Bearer {}", self.key))
+            .json(&serde_json::json!({ "events": events }))
+            .send()
+            .await?;
+
+        let status = response.status().as_u16();
+        if status == 401 || status == 403 {
+            return Err(Error::Unauthorized(detail(&response.text().await.unwrap_or_default())));
+        }
+        if !(200..300).contains(&status) {
+            return Err(Error::Api {
+                status,
+                detail: detail(&response.text().await.unwrap_or_default()),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Pulls the human-readable part out of an RFC 9457 problem document.
@@ -77,6 +149,7 @@ pub struct ClientBuilder {
     base_url: String,
     key: String,
     poll_interval: Duration,
+    event_flush_interval: Duration,
     request_timeout: Duration,
 }
 
@@ -85,6 +158,14 @@ impl ClientBuilder {
     /// drive refreshes yourself.
     pub fn poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    /// How often accumulated experiment events are shipped. Pass
+    /// [`Duration::ZERO`] to disable the background flusher and call
+    /// [`Client::flush_events`] yourself.
+    pub fn event_flush_interval(mut self, interval: Duration) -> Self {
+        self.event_flush_interval = interval;
         self
     }
 
@@ -138,14 +219,22 @@ impl ClientBuilder {
         let inner = Arc::new(Inner {
             http,
             url: format!("{base}/api/v1/snapshot"),
+            events_url: format!("{base}/api/v1/events"),
             key: self.key,
             current: ArcSwapOption::empty(),
+            recorder: Recorder::default(),
         });
 
-        let refresher = (!self.poll_interval.is_zero())
-            .then(|| spawn_refresher(Arc::clone(&inner), self.poll_interval));
+        let mut tasks = Vec::new();
+        if !self.poll_interval.is_zero() {
+            tasks.push(spawn_refresher(Arc::clone(&inner), self.poll_interval));
+        }
+        if !self.event_flush_interval.is_zero() {
+            tasks.push(spawn_event_flusher(Arc::clone(&inner), self.event_flush_interval));
+        }
+        let tasks = (!tasks.is_empty()).then(|| Arc::new(tasks));
 
-        Ok((Client { inner: Arc::clone(&inner), refresher: refresher.map(Arc::new) }, inner))
+        Ok((Client { inner: Arc::clone(&inner), tasks }, inner))
     }
 }
 
@@ -153,7 +242,7 @@ impl ClientBuilder {
 #[derive(Debug, Clone)]
 pub struct Client {
     inner: Arc<Inner>,
-    refresher: Option<Arc<JoinHandle<()>>>,
+    tasks: Option<Arc<Vec<JoinHandle<()>>>>,
 }
 
 impl Client {
@@ -164,6 +253,7 @@ impl Client {
             base_url: base_url.into(),
             key: key.into(),
             poll_interval: DEFAULT_POLL_INTERVAL,
+            event_flush_interval: DEFAULT_EVENT_FLUSH_INTERVAL,
             request_timeout: DEFAULT_TIMEOUT,
         }
     }
@@ -230,10 +320,66 @@ impl Client {
         fallback: VariantValue,
     ) -> Evaluation {
         match self.inner.current.load().as_ref() {
-            Some(snapshot) => snapshot.evaluate(flag, context, fallback),
+            Some(snapshot) => {
+                let evaluation = snapshot.evaluate(flag, context, fallback);
+                // A decision under a running experiment is an exposure — the
+                // denominator of that experiment's conversion rate.
+                if let Some(variant) = &evaluation.variant {
+                    for experiment in &snapshot.experiments {
+                        if experiment.flag_key == flag {
+                            self.inner.recorder.record(
+                                &experiment.key,
+                                variant,
+                                EventKind::Exposure,
+                            );
+                        }
+                    }
+                }
+                evaluation
+            }
             // Not loaded yet: behave exactly as if the flag did not exist.
             None => Evaluation::not_found(flag, fallback),
         }
+    }
+
+    /// Records a conversion for every running experiment measuring `metric`.
+    ///
+    /// The variant is attributed by evaluating each experiment's flag for this
+    /// context — the same deterministic bucketing the exposure went through,
+    /// so both sides of the rate land on the same arm without the SDK keeping
+    /// any per-user state. The price of that statelessness: a conversion
+    /// counts even for a context that never actually evaluated the flag, and
+    /// the results view reports such excess rather than hiding it.
+    ///
+    /// Returns how many experiments counted the event — `0` means no running
+    /// experiment measures this metric, which is fine: instrument the metric
+    /// once and experiments can come and go without code changes.
+    pub fn track(&self, metric: &str, context: &EvaluationContext) -> usize {
+        let Some(snapshot) = self.inner.current.load_full() else { return 0 };
+
+        let mut credited = 0;
+        for experiment in &snapshot.experiments {
+            if experiment.metric_key != metric {
+                continue;
+            }
+            // Straight to the snapshot, not through `evaluate` — attributing a
+            // conversion must not also count an exposure.
+            let evaluation = snapshot.evaluate(&experiment.flag_key, context, VariantValue::null());
+            if let Some(variant) = &evaluation.variant {
+                self.inner.recorder.record(&experiment.key, variant, EventKind::Conversion);
+                credited += 1;
+            }
+        }
+        credited
+    }
+
+    /// Ships accumulated experiment events now.
+    ///
+    /// The background flusher does this on an interval; call it directly
+    /// before a graceful shutdown so the final window of counts is not lost
+    /// with the process.
+    pub async fn flush_events(&self) -> Result<(), Error> {
+        self.inner.flush_events().await
     }
 
     /// Every flag in the environment, for bulk logging or a debug endpoint.
@@ -244,24 +390,46 @@ impl Client {
         }
     }
 
-    /// Stops the background refresher. Also happens on drop.
+    /// Stops the background tasks. Also happens on drop. Unflushed events are
+    /// discarded — call [`Client::flush_events`] first if they matter.
     pub fn shutdown(&self) {
-        if let Some(handle) = &self.refresher {
-            handle.abort();
+        if let Some(tasks) = &self.tasks {
+            for task in tasks.iter() {
+                task.abort();
+            }
         }
     }
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
-        // Only the last clone should stop the refresher; earlier ones going
-        // out of scope must not silently freeze everyone else's flags.
-        if let Some(handle) = &self.refresher
-            && Arc::strong_count(handle) == 1
+        // Only the last clone should stop the tasks; earlier ones going out
+        // of scope must not silently freeze everyone else's flags.
+        if let Some(tasks) = &self.tasks
+            && Arc::strong_count(tasks) == 1
         {
-            handle.abort();
+            for task in tasks.iter() {
+                task.abort();
+            }
         }
     }
+}
+
+fn spawn_event_flusher(inner: Arc<Inner>, interval: Duration) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+            // Failures keep their counts (see `flush_events`), so the only
+            // job here is to keep trying and to say what is happening.
+            if let Err(error) = inner.flush_events().await {
+                tracing::warn!(
+                    %error,
+                    transient = error.is_transient(),
+                    "flagforge: event flush failed; counts kept for the next attempt"
+                );
+            }
+        }
+    })
 }
 
 fn spawn_refresher(inner: Arc<Inner>, interval: Duration) -> JoinHandle<()> {
@@ -324,12 +492,14 @@ mod tests {
 
     #[test]
     fn trailing_slashes_do_not_produce_a_double_slash() {
-        // A zero interval skips the background task, so this needs no runtime.
+        // Zero intervals skip both background tasks, so this needs no runtime.
         let (_client, inner) = Client::builder("https://flags.example.com/", "ff_srv_x")
             .poll_interval(Duration::ZERO)
+            .event_flush_interval(Duration::ZERO)
             .build()
             .unwrap();
         assert_eq!(inner.url, "https://flags.example.com/api/v1/snapshot");
+        assert_eq!(inner.events_url, "https://flags.example.com/api/v1/events");
     }
 
     #[tokio::test]
