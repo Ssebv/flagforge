@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO experiment_counters (experiment_id, variant, kind, hour, count)\n        SELECT e.id, d.variant, d.kind, d.hour, d.count\n        FROM UNNEST($2::TEXT[], $3::TEXT[], $4::TEXT[], $5::TIMESTAMPTZ[], $6::BIGINT[])\n             AS d(experiment_key, variant, kind, hour, count)\n        JOIN experiments e\n          ON e.environment_id = $1 AND e.key = d.experiment_key AND e.state = 'running'\n        ON CONFLICT (experiment_id, variant, kind, hour)\n        DO UPDATE SET count = experiment_counters.count + EXCLUDED.count\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TimestamptzArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e36655558ad952fd32f0a01377e796d194b242d29ac80e1830c4e2f63130b15"
+}

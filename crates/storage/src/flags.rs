@@ -196,7 +196,23 @@ pub async fn update_flag(
     })
 }
 
+/// Deletes a flag, refusing while any experiment still references it.
+///
+/// An experiment's counters are only interpretable next to the flag whose
+/// variants they tally, so the delete is refused with a message naming the
+/// experiments — the same contract segment deletion has, though here a
+/// RESTRICT foreign key backs it up at the database.
 pub async fn delete_flag(pool: &PgPool, project_id: Uuid, key: &str) -> Result<()> {
+    let flag = find_flag(pool, project_id, key).await?;
+    let referencing = crate::experiments::experiments_referencing_flag(pool, flag.id).await?;
+    if !referencing.is_empty() {
+        return Err(StorageError::InUse {
+            entity: "flag",
+            key: key.to_owned(),
+            referenced_by: referencing,
+        });
+    }
+
     let deleted =
         sqlx::query!(r#"DELETE FROM flags WHERE project_id = $1 AND key = $2"#, project_id, key)
             .execute(pool)

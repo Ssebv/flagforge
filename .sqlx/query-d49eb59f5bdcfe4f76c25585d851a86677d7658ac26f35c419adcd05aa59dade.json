@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM experiments WHERE environment_id = $1 AND key = $2 AND state <> 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d49eb59f5bdcfe4f76c25585d851a86677d7658ac26f35c419adcd05aa59dade"
+}

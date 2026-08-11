@@ -179,6 +179,105 @@ impl Segment {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExperimentState {
+    /// Defined but not yet measuring; the only state where the measurement
+    /// fields may still be edited.
+    Draft,
+    /// Counting exposures and conversions; travels in the snapshot.
+    Running,
+    /// Finished. Terminal: reopening a measurement window would average two
+    /// populations into an answer about neither.
+    Stopped,
+}
+
+impl ExperimentState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "draft" => Some(Self::Draft),
+            "running" => Some(Self::Running),
+            "stopped" => Some(Self::Stopped),
+            _ => None,
+        }
+    }
+}
+
+/// An A/B experiment, as stored.
+///
+/// `flag_key` and `variants` are denormalized from the flag at read time: every
+/// consumer — validation, the dashboard, the results view — needs them, and
+/// making each one re-fetch the flag would turn one join into four queries.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct Experiment {
+    pub id: Uuid,
+    pub environment_id: Uuid,
+    pub flag_id: Uuid,
+    pub flag_key: String,
+    pub variants: Vec<flagforge_core::Variant>,
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub metric_key: String,
+    pub control_variant: String,
+    pub state: ExperimentState,
+    pub started_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Experiment {
+    /// The SDK-facing view, valid only while the experiment is running.
+    pub fn spec(&self) -> flagforge_core::ExperimentSpec {
+        flagforge_core::ExperimentSpec {
+            key: self.key.clone(),
+            flag_key: self.flag_key.clone(),
+            metric_key: self.metric_key.clone(),
+            control_variant: self.control_variant.clone(),
+            version: self.version,
+        }
+    }
+}
+
+/// What one kind of counter counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CounterKind {
+    /// The flag was evaluated for a context while the experiment ran.
+    Exposure,
+    /// A tracked metric event attributed to a variant.
+    Conversion,
+}
+
+impl CounterKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exposure => "exposure",
+            Self::Conversion => "conversion",
+        }
+    }
+}
+
+/// One increment on its way into `experiment_counters`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterDelta {
+    pub experiment_key: String,
+    pub variant: String,
+    pub kind: CounterKind,
+    pub at: DateTime<Utc>,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ApiKey {
     pub id: Uuid,

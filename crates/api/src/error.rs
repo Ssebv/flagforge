@@ -140,6 +140,9 @@ impl From<StorageError> for ApiError {
             // honouring it would leave a rule pointing at nothing. The message
             // names what has to be changed first.
             in_use @ StorageError::InUse { .. } => Self::Conflict(in_use.to_string()),
+            // A 409 again: the row exists and the request is well formed, but
+            // its lifecycle state does not admit this operation.
+            state @ StorageError::WrongState { .. } => Self::Conflict(state.to_string()),
             StorageError::Invalid { entity } => {
                 Self::BadRequest(format!("{entity} failed a database constraint"))
             }

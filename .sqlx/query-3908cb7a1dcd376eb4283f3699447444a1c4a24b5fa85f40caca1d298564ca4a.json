@@ -1,0 +1,209 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT e.id, e.environment_id, e.flag_id, f.key AS flag_key, f.variants,\n                   e.key, e.name, e.description, e.metric_key, e.control_variant,\n                   e.state, e.started_at, e.stopped_at, e.version, e.created_at, e.updated_at\n            FROM experiments e\n            JOIN flags f ON f.id = e.flag_id\n            WHERE e.environment_id = $1 AND e.key = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "environment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "environment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "flag_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "flag_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "flag_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flags",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "variants",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "flags",
+            "name": "variants"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "metric_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "metric_key"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "control_variant",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "control_variant"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "stopped_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "stopped_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "experiments",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3908cb7a1dcd376eb4283f3699447444a1c4a24b5fa85f40caca1d298564ca4a"
+}
