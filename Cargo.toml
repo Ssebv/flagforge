@@ -65,6 +65,7 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 jsonwebtoken = { version = "11.0", default-features = false, features = ["rust_crypto"] }
 argon2 = "0.5"
 sha2 = "0.11"
+subtle = "2.6"
 base64 = "0.23"
 rand = "0.10"
 

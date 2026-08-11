@@ -41,6 +41,7 @@ metrics-exporter-prometheus = { workspace = true }
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
 sha2 = { workspace = true }
+subtle = { workspace = true }
 base64 = { workspace = true }
 rand = { workspace = true }
 
