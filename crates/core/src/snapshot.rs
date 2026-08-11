@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::context::EvaluationContext;
 use crate::engine::{Evaluation, EvaluationEnv, evaluate};
+use crate::experiment::ExperimentSpec;
 use crate::flag::Flag;
 use crate::segment::{Segment, SegmentSet};
 use crate::value::VariantValue;
@@ -34,9 +35,16 @@ pub struct EnvironmentSnapshot {
     /// holding flags but no segments would quietly stop matching.
     #[serde(default)]
     pub segments: SegmentSet,
-    /// Highest `version` across flags *and* segments, used as an ETag-style
-    /// cache token. Segments count because editing one changes what every flag
-    /// referencing it serves, without touching any flag's own version.
+    /// The experiments currently running, so an SDK can attribute exposures
+    /// and conversions locally. Only running ones travel: a draft is not yet
+    /// measuring and a stopped one must stop counting everywhere at once.
+    #[serde(default)]
+    pub experiments: Vec<ExperimentSpec>,
+    /// Highest `version` across flags, segments *and* running experiments,
+    /// used as an ETag-style cache token. Segments count because editing one
+    /// changes what every flag referencing it serves, without touching any
+    /// flag's own version; experiments count because starting or stopping one
+    /// changes what SDKs should record.
     pub version: i64,
     pub generated_at: DateTime<Utc>,
 }
@@ -66,9 +74,19 @@ impl EnvironmentSnapshot {
             salt: salt.into(),
             flags,
             segments,
+            experiments: Vec::new(),
             version,
             generated_at,
         }
+    }
+
+    /// Attaches the running experiments, folding their versions into the
+    /// snapshot's so starting or stopping one is a visible change.
+    pub fn with_experiments(mut self, experiments: Vec<ExperimentSpec>) -> Self {
+        self.version =
+            experiments.iter().map(|e| e.version).chain([self.version]).max().unwrap_or(0);
+        self.experiments = experiments;
+        self
     }
 
     pub fn get(&self, flag_key: &str) -> Option<&Flag> {
@@ -202,6 +220,34 @@ mod tests {
 
         let free = EvaluationContext::new("u").with("plan", "free");
         assert!(!snap.evaluate("f", &free, VariantValue::Bool(false)).is_on());
+    }
+
+    /// Starting an experiment must move the snapshot version for the same
+    /// reason a segment edit does: SDK behaviour changes without any flag
+    /// having been written.
+    #[test]
+    fn version_covers_running_experiments_too() {
+        use crate::experiment::ExperimentSpec;
+
+        let snap =
+            snapshot(vec![Flag { version: 3, ..Flag::boolean("a") }]).with_experiments(vec![
+                ExperimentSpec {
+                    key: "exp".into(),
+                    flag_key: "a".into(),
+                    metric_key: "converted".into(),
+                    control_variant: "off".into(),
+                    version: 8,
+                },
+            ]);
+        assert_eq!(snap.version, 8);
+        assert_eq!(snap.experiments.len(), 1);
+
+        // And a snapshot serialized before experiments existed still loads.
+        let old = r#"{"environment_id":"00000000-0000-0000-0000-000000000000",
+                      "environment_key":"production","flags":{},"version":1,
+                      "generated_at":"2026-01-01T00:00:00Z"}"#;
+        let parsed: EnvironmentSnapshot = serde_json::from_str(old).unwrap();
+        assert!(parsed.experiments.is_empty());
     }
 
     #[test]

@@ -38,6 +38,7 @@
 pub mod bucket;
 pub mod context;
 pub mod engine;
+pub mod experiment;
 pub mod flag;
 pub mod matcher;
 pub mod segment;
@@ -48,6 +49,9 @@ pub mod value;
 pub use bucket::{bucket, pick_weighted};
 pub use context::EvaluationContext;
 pub use engine::{Evaluation, EvaluationEnv, Reason, evaluate};
+pub use experiment::{
+    Comparison, ConfidenceInterval, ExperimentSpec, VariantCounts, VariantResult, results,
+};
 pub use flag::{
     Condition, Distribution, Flag, Operator, Rule, TOTAL_WEIGHT, Variant, WeightedVariant,
 };
