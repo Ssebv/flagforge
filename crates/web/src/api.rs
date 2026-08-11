@@ -206,6 +206,33 @@ pub mod models {
         pub referenced_by: Vec<String>,
     }
 
+    /// An A/B experiment, as the management API returns it.
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct Experiment {
+        pub id: String,
+        pub key: String,
+        pub name: String,
+        pub description: Option<String>,
+        pub flag_key: String,
+        /// The flag's variants, denormalized so the results view can render
+        /// every arm without a second request.
+        pub variants: Vec<Variant>,
+        pub metric_key: String,
+        pub control_variant: String,
+        /// `draft`, `running` or `stopped`.
+        pub state: String,
+        pub started_at: Option<String>,
+        pub stopped_at: Option<String>,
+        pub version: i64,
+    }
+
+    /// An experiment next to its judged results.
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct ExperimentResults {
+        pub experiment: Experiment,
+        pub results: Vec<flagforge_core::VariantResult>,
+    }
+
     #[derive(Debug, Clone, PartialEq, Deserialize)]
     pub struct ApiKey {
         pub id: String,
@@ -321,6 +348,17 @@ pub struct SegmentBody {
     /// edit moves every flag that references it, so a silent overwrite here is
     /// wider than a silent overwrite of one flag.
     pub expected_version: i64,
+}
+
+#[derive(Serialize)]
+pub struct NewExperiment<'a> {
+    pub key: &'a str,
+    pub name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
+    pub flag_key: &'a str,
+    pub metric_key: &'a str,
+    pub control_variant: &'a str,
 }
 
 #[derive(Serialize)]
@@ -590,6 +628,84 @@ pub async fn delete_segment(
     send(
         Method::Delete,
         &format!("/projects/{project}/environments/{environment}/segments/{segment}"),
+        Some(token),
+        None,
+    )
+    .await
+}
+
+pub async fn list_experiments(
+    token: &str,
+    project: &str,
+    environment: &str,
+) -> Result<Vec<Experiment>, ApiError> {
+    send(
+        Method::Get,
+        &format!("/projects/{project}/environments/{environment}/experiments"),
+        Some(token),
+        None,
+    )
+    .await
+}
+
+pub async fn create_experiment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    body: NewExperiment<'_>,
+) -> Result<Experiment, ApiError> {
+    send(
+        Method::Post,
+        &format!("/projects/{project}/environments/{environment}/experiments"),
+        Some(token),
+        json(body),
+    )
+    .await
+}
+
+/// `action` is `start` or `stop` — the two lifecycle transitions.
+pub async fn transition_experiment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    experiment: &str,
+    action: &str,
+) -> Result<Experiment, ApiError> {
+    send(
+        Method::Post,
+        &format!(
+            "/projects/{project}/environments/{environment}/experiments/{experiment}/{action}"
+        ),
+        Some(token),
+        Some(Value::Null),
+    )
+    .await
+}
+
+pub async fn experiment_results(
+    token: &str,
+    project: &str,
+    environment: &str,
+    experiment: &str,
+) -> Result<ExperimentResults, ApiError> {
+    send(
+        Method::Get,
+        &format!("/projects/{project}/environments/{environment}/experiments/{experiment}/results"),
+        Some(token),
+        None,
+    )
+    .await
+}
+
+pub async fn delete_experiment(
+    token: &str,
+    project: &str,
+    environment: &str,
+    experiment: &str,
+) -> Result<(), ApiError> {
+    send(
+        Method::Delete,
+        &format!("/projects/{project}/environments/{environment}/experiments/{experiment}"),
         Some(token),
         None,
     )

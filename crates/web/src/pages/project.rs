@@ -173,6 +173,13 @@ pub fn ProjectDetail() -> impl IntoView {
                     "Segments"
                 </A>
                 <A
+                    href=move || format!("/projects/{}/experiments", project_key())
+                    attr:class="btn btn--secondary"
+                >
+                    <Icon name="flask" />
+                    "Experiments"
+                </A>
+                <A
                     href=move || format!("/projects/{}/keys", project_key())
                     attr:class="btn btn--secondary"
                 >
