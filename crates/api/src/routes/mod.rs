@@ -20,6 +20,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use metrics_exporter_prometheus::PrometheusHandle;
 use rand::Rng;
+use subtle::ConstantTimeEq;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -218,14 +219,7 @@ fn metrics_allowed(expected: Option<&str>, headers: &axum::http::HeaderMap) -> b
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
 
-    constant_time_eq(presented.as_bytes(), expected.as_bytes())
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    presented.as_bytes().ct_eq(expected.as_bytes()).into()
 }
 
 /// Rejects identifiers the database would reject anyway, with a message that
@@ -289,10 +283,14 @@ mod tests {
 
     #[test]
     fn the_comparison_does_not_short_circuit_on_length() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"abcd"));
-        assert!(constant_time_eq(b"", b""));
+        let expected = Some("abc");
+        assert!(metrics_allowed(expected, &bearer("abc")));
+        assert!(!metrics_allowed(expected, &bearer("abd")));
+        // Longer than the token: a comparison that stopped at the shorter
+        // length would wave this through.
+        assert!(!metrics_allowed(expected, &bearer("abcd")));
+        // An empty configured token matches an absent header.
+        assert!(metrics_allowed(Some(""), &axum::http::HeaderMap::new()));
     }
 
     #[test]
