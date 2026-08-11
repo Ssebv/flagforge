@@ -32,6 +32,7 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("projects/:project") view=pages::ProjectDetail />
                     <Route path=path!("projects/:project/flags/:flag") view=pages::FlagDetail />
                     <Route path=path!("projects/:project/segments") view=pages::Segments />
+                    <Route path=path!("projects/:project/experiments") view=pages::Experiments />
                     <Route path=path!("projects/:project/keys") view=pages::Keys />
                     <Route path=path!("audit") view=pages::Audit />
                 </ParentRoute>

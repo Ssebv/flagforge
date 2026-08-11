@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE experiments\n        SET state      = $4,\n            started_at = CASE WHEN $4 = 'running' THEN now() ELSE started_at END,\n            stopped_at = CASE WHEN $4 = 'stopped' THEN now() ELSE stopped_at END\n        WHERE environment_id = $1 AND key = $2 AND state = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76a0e1755c781035f94285930971fa0118c5d7e59d9940649f58cdf6c45994b4"
+}

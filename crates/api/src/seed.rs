@@ -251,6 +251,8 @@ pub async fn run(
         .await?;
     }
 
+    seed_experiment(pool, organization.id, actor, project.id, &environments).await?;
+
     // One key per environment, printed once — exactly as the dashboard does.
     let mut secrets = Vec::new();
     for environment in &environments {
@@ -268,6 +270,112 @@ pub async fn run(
     }
 
     report(&credentials.email, &owner_password, generated, &secrets);
+    Ok(())
+}
+
+/// One experiment on `checkout.v2` per environment: running with a week of
+/// counters in production, still a draft in staging — the two states an
+/// operator actually encounters, on the first screen they open.
+///
+/// The counters are deterministic rather than random (seeding must be
+/// reproducible), with a small modular wobble so the hourly cells do not all
+/// carry the same number: the treatment converts at ~13%, the control at ~9%,
+/// enough for the z-test to reach a verdict on a week of data.
+async fn seed_experiment(
+    pool: &PgPool,
+    organization_id: Uuid,
+    actor: (Option<Uuid>, &str),
+    project_id: Uuid,
+    environments: &[flagforge_storage::models::Environment],
+) -> anyhow::Result<()> {
+    use chrono::{TimeDelta, Utc};
+    use flagforge_storage::experiments;
+    use flagforge_storage::models::{CounterDelta, CounterKind};
+
+    const EXPERIMENT_KEY: &str = "checkout-cta";
+    const HOURS: i64 = 24 * 7;
+
+    let flag = flags::find_flag(pool, project_id, "checkout.v2").await?;
+
+    for environment in environments {
+        experiments::create_experiment(
+            pool,
+            environment.id,
+            flag.id,
+            EXPERIMENT_KEY,
+            "Checkout call-to-action",
+            Some("Does the rebuilt checkout convert better than the old one?"),
+            "order.completed",
+            "off",
+        )
+        .await?;
+
+        audit::record(
+            pool,
+            NewAuditEntry::new(
+                organization_id,
+                actor,
+                "experiment.created",
+                "experiment",
+                format!("checkout/{}/{EXPERIMENT_KEY}", environment.key),
+            )
+            .in_environment(environment.id),
+        )
+        .await?;
+
+        if !environment.is_production {
+            continue;
+        }
+
+        experiments::start_experiment(pool, environment.id, EXPERIMENT_KEY).await?;
+
+        let now = Utc::now();
+        let mut deltas = Vec::new();
+        for hour in 0..HOURS {
+            let at = now - TimeDelta::hours(hour);
+            let exposures = 40 + (hour % 9) as u32;
+            for (variant, conversions) in
+                [("on", 5 + (hour % 3) as u32), ("off", 3 + (hour % 3) as u32)]
+            {
+                deltas.push(CounterDelta {
+                    experiment_key: EXPERIMENT_KEY.to_owned(),
+                    variant: variant.to_owned(),
+                    kind: CounterKind::Exposure,
+                    at,
+                    count: exposures,
+                });
+                deltas.push(CounterDelta {
+                    experiment_key: EXPERIMENT_KEY.to_owned(),
+                    variant: variant.to_owned(),
+                    kind: CounterKind::Conversion,
+                    at,
+                    count: conversions,
+                });
+            }
+        }
+        experiments::ingest_counters(pool, environment.id, &deltas).await?;
+        experiments::backdate_start(
+            pool,
+            environment.id,
+            EXPERIMENT_KEY,
+            now - TimeDelta::hours(HOURS),
+        )
+        .await?;
+
+        audit::record(
+            pool,
+            NewAuditEntry::new(
+                organization_id,
+                actor,
+                "experiment.started",
+                "experiment",
+                format!("checkout/{}/{EXPERIMENT_KEY}", environment.key),
+            )
+            .in_environment(environment.id),
+        )
+        .await?;
+    }
+
     Ok(())
 }
 

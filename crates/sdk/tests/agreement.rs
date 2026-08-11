@@ -165,6 +165,18 @@ impl Fixture {
         assert!(response.status().is_success(), "PUT {path} failed: {}", response.status());
     }
 
+    async fn get(&self, path: &str) -> Value {
+        let response = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .header("authorization", format!("Bearer {}", self.token))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "GET {path} failed: {}", response.status());
+        response.json().await.unwrap()
+    }
+
     /// Asks the server for a decision, the way a thin client would.
     async fn evaluate_remotely(&self, flag: &str, context: &EvaluationContext) -> bool {
         let response: Value = self
@@ -301,6 +313,80 @@ async fn local_and_remote_agree_on_flags_gated_by_a_segment(pool: PgPool) {
         (50..=130).contains(&members),
         "expected roughly 40% of 200 users in the cohort, got {members}"
     );
+}
+
+/// Exposures and conversions are attributed client-side, by the same
+/// deterministic evaluation the flag check used. If that attribution drifted
+/// from local assignment, an experiment would compare cohorts that do not
+/// exist — so the counters the server ends up holding must equal a tally the
+/// test keeps by hand.
+#[sqlx::test(migrations = "../../migrations")]
+async fn recorded_counters_agree_with_local_assignment(pool: PgPool) {
+    use std::collections::HashMap;
+
+    let address = serve(pool).await;
+    let fixture = Fixture::create(address).await;
+    let experiments = "/api/v1/projects/checkout/environments/production/experiments";
+
+    fixture
+        .post(
+            experiments,
+            json!({
+                "key": "cta", "name": "Checkout CTA", "flag_key": "checkout.v2",
+                "metric_key": "order.completed", "control_variant": "off",
+            }),
+        )
+        .await;
+    fixture.post(&format!("{experiments}/cta/start"), json!({})).await;
+
+    // Both background tasks off: the test drives the flush itself.
+    let client = Client::builder(&fixture.base, &fixture.sdk_key)
+        .poll_interval(Duration::ZERO)
+        .event_flush_interval(Duration::ZERO)
+        .connect()
+        .await
+        .unwrap();
+
+    let mut exposures: HashMap<String, u64> = HashMap::new();
+    let mut conversions: HashMap<String, u64> = HashMap::new();
+    for i in 0..200 {
+        let context = context(i);
+        let decision =
+            client.evaluate("checkout.v2", &context, flagforge_sdk::VariantValue::null());
+        let variant = decision.variant.clone().expect("a configured flag resolves a variant");
+        *exposures.entry(variant.clone()).or_default() += 1;
+
+        // Every third user converts.
+        if i % 3 == 0 {
+            assert_eq!(client.track("order.completed", &context), 1);
+            *conversions.entry(variant).or_default() += 1;
+        }
+    }
+
+    // A metric nobody measures is not an error — it counts toward nothing.
+    assert_eq!(client.track("unmeasured.metric", &context(0)), 0);
+
+    client.flush_events().await.expect("the flush must reach the server");
+
+    let body = fixture.get(&format!("{experiments}/cta/results")).await;
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 2, "{body}");
+    for arm in results {
+        let variant = arm["variant"].as_str().unwrap();
+        assert_eq!(
+            arm["exposures"].as_u64().unwrap(),
+            exposures.get(variant).copied().unwrap_or(0),
+            "exposures for `{variant}` disagree with local assignment: {body}"
+        );
+        assert_eq!(
+            arm["conversions"].as_u64().unwrap(),
+            conversions.get(variant).copied().unwrap_or(0),
+            "conversions for `{variant}` disagree with local attribution: {body}"
+        );
+    }
+
+    // Flushing with nothing accumulated is a no-op, not a request.
+    client.flush_events().await.unwrap();
 }
 
 #[sqlx::test(migrations = "../../migrations")]

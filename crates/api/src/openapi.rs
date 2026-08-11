@@ -6,7 +6,9 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::routes::{audit, auth, evaluate, flags, health, keys, projects, segments};
+use crate::routes::{
+    audit, auth, evaluate, events, experiments, flags, health, keys, projects, segments,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -24,6 +26,7 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects, segmen
         (name = "environments", description = "Environments within a project"),
         (name = "flags", description = "Flag definitions and per-environment configuration"),
         (name = "segments", description = "Reusable audiences that flag rules reference"),
+        (name = "experiments", description = "A/B experiments: a flag measured against a metric"),
         (name = "keys", description = "SDK keys"),
         (name = "audit", description = "Change history"),
         (name = "evaluate", description = "The SDK-facing evaluation API"),
@@ -54,6 +57,14 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects, segmen
         segments::get,
         segments::update,
         segments::delete,
+        experiments::list,
+        experiments::create,
+        experiments::get,
+        experiments::update,
+        experiments::start,
+        experiments::stop,
+        experiments::delete,
+        experiments::results,
         keys::create,
         keys::list,
         keys::revoke,
@@ -61,6 +72,7 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects, segmen
         evaluate::evaluate_all,
         evaluate::evaluate_one,
         evaluate::snapshot,
+        events::ingest,
     ),
     components(schemas(
         crate::error::ProblemDetails,
@@ -92,6 +104,18 @@ use crate::routes::{audit, auth, evaluate, flags, health, keys, projects, segmen
         flagforge_storage::flags::ConfiguredFlag,
         flagforge_storage::models::Segment,
         crate::routes::segments::SegmentWithUsage,
+        flagforge_storage::models::Experiment,
+        flagforge_storage::models::ExperimentState,
+        flagforge_storage::models::CounterKind,
+        flagforge_core::ExperimentSpec,
+        flagforge_core::VariantCounts,
+        flagforge_core::VariantResult,
+        flagforge_core::ConfidenceInterval,
+        flagforge_core::Comparison,
+        crate::routes::experiments::ExperimentResults,
+        crate::routes::events::EventsRequest,
+        crate::routes::events::EventDelta,
+        crate::routes::events::EventsResponse,
         flagforge_storage::models::ApiKey,
         flagforge_storage::models::KeyScope,
         flagforge_storage::models::AuditEntry,

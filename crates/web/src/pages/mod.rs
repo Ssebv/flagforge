@@ -1,6 +1,7 @@
 //! Route views.
 
 mod audit;
+mod experiments;
 pub(crate) mod flag;
 mod keys;
 mod login;
@@ -9,6 +10,7 @@ mod projects;
 mod segments;
 
 pub use audit::Audit;
+pub use experiments::Experiments;
 pub use flag::FlagDetail;
 pub use keys::Keys;
 pub use login::Login;

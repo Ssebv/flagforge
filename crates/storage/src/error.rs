@@ -32,6 +32,13 @@ pub enum StorageError {
     #[error("{entity} `{key}` is still referenced by {}", referenced_by.join(", "))]
     InUse { entity: &'static str, key: String, referenced_by: Vec<String> },
 
+    /// An operation that is only legal in some lifecycle state, attempted in
+    /// another — starting an already-stopped experiment, say. The message
+    /// names both states so the caller knows what to do rather than what
+    /// went wrong.
+    #[error("{entity} `{key}` is {actual}; this operation needs it {needed}")]
+    WrongState { entity: &'static str, key: String, actual: &'static str, needed: &'static str },
+
     /// A row we wrote no longer deserializes into the domain model. This means
     /// a schema/model skew, not a user error, so it is never a 4xx.
     #[error("stored {entity} is malformed: {source}")]

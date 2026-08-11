@@ -21,6 +21,7 @@ pub mod accounts;
 pub mod api_keys;
 pub mod audit;
 pub mod error;
+pub mod experiments;
 pub mod flags;
 pub mod models;
 pub mod notify;

@@ -140,6 +140,11 @@ pub struct SnapshotResponse {
     /// report it as an ordinary fallthrough — plausible answers, silently
     /// disagreeing with the server.
     pub segments: flagforge_core::SegmentSet,
+    /// The experiments currently running. An SDK that sees one records
+    /// exposures when it evaluates the flag and attributes tracked metric
+    /// events to variants; an SDK too old to know the field ignores it and
+    /// keeps evaluating correctly.
+    pub experiments: Vec<flagforge_core::ExperimentSpec>,
     pub version: i64,
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -185,6 +190,7 @@ pub async fn snapshot(
         salt: snapshot.salt.clone(),
         flags: snapshot.flags.clone(),
         segments: snapshot.segments.clone(),
+        experiments: snapshot.experiments.clone(),
         version: snapshot.version,
         generated_at: snapshot.generated_at,
     }))

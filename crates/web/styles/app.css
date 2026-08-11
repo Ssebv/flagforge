@@ -103,6 +103,10 @@
   --bar-2: #1d4ed8;
   --bar-3: #166534;
 
+  /* Confidence-interval ticks on the result meter: translucent ink, so they
+     read over both the coloured fill and the sunken track. */
+  --ci-ink: rgb(23 20 18 / 0.55);
+
   --shadow-sm: 0 1px 2px rgb(23 20 18 / 0.06), 0 1px 1px rgb(23 20 18 / 0.04);
   --shadow: 0 4px 12px rgb(23 20 18 / 0.08), 0 1px 3px rgb(23 20 18 / 0.05);
   --shadow-lg: 0 16px 40px rgb(23 20 18 / 0.16), 0 4px 12px rgb(23 20 18 / 0.08);
@@ -145,6 +149,10 @@
   --bar-1: var(--grey-400);
   --bar-2: #60a5fa;
   --bar-3: #4ade80;
+
+  /* Light ink on dark: the fills above are light, so the interval ticks go
+     the other way. */
+  --ci-ink: rgb(250 250 249 / 0.65);
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow: 0 4px 14px rgb(0 0 0 / 0.5);
@@ -1282,6 +1290,51 @@ code {
 .dist__part--3 {
   background: var(--bar-3);
   color: var(--bar-fg);
+}
+
+/* Experiment result meter — one per arm, on a scale shared by the whole
+ * table. The fill length-encodes the conversion rate; the bracketed band is
+ * the 95% Wilson interval. Fill colours reuse the `.dist` tokens, keyed to
+ * the arm's position in the flag definition, so an arm keeps its colour
+ * between this view and the flag page's distribution bar. The exact numbers
+ * are printed beside every meter — the bar is the shape, never the source. */
+.meter {
+  position: relative;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.meter__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.meter__fill--0 {
+  background: var(--bar-0);
+}
+.meter__fill--1 {
+  background: var(--bar-1);
+}
+.meter__fill--2 {
+  background: var(--bar-2);
+}
+.meter__fill--3 {
+  background: var(--bar-3);
+}
+
+/* End ticks rather than a solid band, so the interval stays readable where it
+ * crosses from fill into track. `--ci-ink` is defined per theme: a mid-grey
+ * would vanish against one of the two. */
+.meter__ci {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-inline: 2px solid var(--ci-ink);
 }
 
 .preview {
