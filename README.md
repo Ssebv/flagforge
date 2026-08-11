@@ -39,6 +39,10 @@ FlagForge is the service behind that question:
   people are in it wherever it is referenced.
 - **Percentage rollouts.** Deterministic and sticky: `user-42` lands in the
   same bucket on every node, forever, without any shared state.
+- **A/B experiments.** Bind a flag to a conversion metric and its variants
+  become the arms. SDKs count exposures and conversions locally and flush
+  hourly totals; the dashboard answers with rates, 95 % confidence intervals
+  and a two-proportion z-test against the control — a verdict, not a hunch.
 - **Per-environment configuration.** One flag, on in staging, at 5 % in
   production. Each environment has its own bucketing salt, so a canary in
   staging does not preselect the same users in production. Every flag is
@@ -272,6 +276,18 @@ WASM. The editor is not approximating what the server would do — it is calling
   user lands on does depend on the salt, and the salt never leaves the server —
   so the UI says that rather than pretending otherwise.
 
+### Experiments end in a verdict
+
+<img src="docs/screenshots/experiments.png" alt="An experiment's results: one meter per arm with a confidence interval, and a significance verdict against the control" />
+
+An experiment binds a flag to a conversion metric; the flag's variants become
+the arms and the traffic you already serve becomes the sample. Each arm gets a
+rate, a 95 % Wilson interval drawn on a shared scale, and a two-proportion
+z-test against the control — in words, with the exact numbers printed beside
+every bar. The lifecycle is one-way (draft → running → stopped) because a
+reopened measurement window would average two populations into an answer about
+neither, and a stopped experiment's results stay exactly as they ended.
+
 ### The rest of it
 
 | | |
@@ -334,6 +350,12 @@ let user = EvaluationContext::new(&user_id).with("plan", plan).with("country", c
 if flags.is_enabled("checkout.v2", &user, false) {
     render_new_checkout()
 }
+
+// When the thing you care about happens, name it. If a running experiment
+// measures this metric, the conversion is attributed to whichever variant
+// this user was assigned; if none does, it counts toward nothing — so you
+// instrument once and experiments come and go without code changes.
+flags.track("order.completed", &user);
 ```
 
 It fetches the environment's configuration once, keeps it in memory, refreshes
@@ -492,6 +514,35 @@ Rollouts can also bucket on an attribute instead of the context key
 (`bucket_by: "account_id"`), which keeps every user of one account on the same
 side of a rollout. Half a team seeing a new UI is its own kind of bug.
 
+### Experiment counters are bounded by time, not traffic
+
+An experiments feature usually arrives with an event pipeline: a queue, a raw
+event table, a nightly aggregation job. FlagForge stores none of that. SDKs
+collapse events into an in-process counter map — one cell per (experiment,
+variant, kind) — and flush the *counts*; the server adds them into hourly
+cells with a single `INSERT … ON CONFLICT` round trip. A service evaluating a
+flag a million times an hour sends the same few dozen bytes as one evaluating
+it twice, and the table grows with hours elapsed times variants, not with
+traffic. The price, accepted knowingly: individual events are gone, so there
+is nothing to re-analyse later.
+
+Attribution needs no per-user state either. Because assignment is a pure
+function, `track("order.completed", &user)` simply re-evaluates the
+experiment's flag for that context — the same deterministic bucketing the
+exposure went through — so both sides of the rate land on the same arm. The
+corner this cuts is visible rather than hidden: a conversion can be tracked
+for a context that never evaluated the flag, and the results view reports the
+excess instead of laundering it into the rate.
+
+The statistics are deliberately conventional: a 95 % Wilson interval per arm —
+chosen over the normal approximation because young experiments live exactly
+where that one misbehaves — and a pooled two-proportion z-test against the
+control, with the normal CDF via Abramowitz & Stegun rather than a statistics
+crate an order of magnitude larger than the module it would serve. The
+approximation's maximum error (1.5 × 10⁻⁷) sits four decimal places below any
+p-value cutoff a reader would act on, and the tests pin it against published
+values.
+
 ### An invalid flag can never reach the database
 
 `flagforge-core::validate` rejects anything the engine could not evaluate
@@ -580,26 +631,30 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**219 tests**, in four layers — plus a CI job that runs the quick start above
+**244 tests**, in four layers — plus a CI job that runs the quick start above
 and checks what it promises, because it was once broken while every other
 check stayed green:
 
-- **Domain (74).** Pure unit tests plus `proptest` properties: buckets stay in
+- **Domain (86).** Pure unit tests plus `proptest` properties: buckets stay in
   range, bucketing is referentially transparent, field boundaries are
   unambiguous, any full weight partition resolves, and a segment cohort cannot
-  alias the flag of the same name.
-- **HTTP unit (77).** Error mapping, token round trips, tampering detection,
+  alias the flag of the same name. The experiment statistics live here too —
+  Wilson intervals that always contain their point estimate, a z-test that is
+  antisymmetric, and an `erf` checked against published values.
+- **HTTP unit (79).** Error mapping, token round trips, tampering detection,
   the rate limiter's refill maths, key generation, usage-write throttling, and
   OpenAPI generation (including a check that the domain and storage `Flag` and
   `Segment` types do not collide into one schema — utoipa keys schemas by type
   name).
-- **Integration (58).** `#[sqlx::test]` gives each test its own freshly
+- **Integration (64).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`. Includes the ones a
   public deployment rests on: that the seed is a no-op the second time, and
   that the published read-only account is refused every write.
-- **SDK (11).** Including the one that matters: a real server on a real socket,
-  and 300 users evaluated both locally and remotely to prove the two agree.
+- **SDK (15).** Including the one that matters: a real server on a real socket,
+  and 300 users evaluated both locally and remotely to prove the two agree —
+  and, for experiments, that the counters the server ends up holding equal a
+  tally the test keeps by hand from local assignment.
 
 The integration tests assert the things that would actually hurt:
 
@@ -618,6 +673,9 @@ a_percentage_rollout_is_sticky_and_lands_near_its_target
 a_revoked_sdk_key_stops_working_immediately
 two_unrelated_companies_may_share_a_name
 a_flag_defined_before_an_environment_is_still_configured_in_it
+recorded_counters_agree_with_local_assignment
+an_experiment_pins_its_flag_against_deletion
+duplicate_cells_in_one_batch_are_summed_not_a_server_error
 ```
 
 CI runs `cargo fmt --check`, `clippy -D warnings`, the full suite against a
@@ -719,6 +777,7 @@ flagforge/
 │   ├── core/          # domain model + evaluation engine (no I/O)
 │   │   ├── bucket.rs      # deterministic hashing, + property tests
 │   │   ├── engine.rs      # evaluate(flag, context, environment)
+│   │   ├── experiment.rs  # A/B specs + the statistics that judge them
 │   │   ├── matcher.rs     # targeting operators, segment membership
 │   │   ├── segment.rs     # reusable audiences
 │   │   └── validate.rs    # what may never reach the database
@@ -726,7 +785,7 @@ flagforge/
 │   ├── api/           # axum handlers, auth, cache, OpenAPI
 │   │   └── tests/         # integration suite over a real Postgres
 │   ├── web/           # Leptos dashboard -> WASM, own workspace
-│   │   ├── src/pages/     # login, projects, flags, segments, keys, audit
+│   │   ├── src/pages/     # login, projects, flags, segments, experiments, keys, audit
 │   │   └── styles/        # handwritten design system, light + dark
 │   └── sdk/           # the client a service embeds
 │       └── tests/         # local decisions vs the server's, user by user
