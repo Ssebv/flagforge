@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE experiments SET started_at = $3\n        WHERE environment_id = $1 AND key = $2 AND state = 'running'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c82e5c51e3ce3ea61e56e6cb25765752b330e9b2e0a18027d2a3eff3ff2ec1e2"
+}

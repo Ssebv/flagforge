@@ -235,6 +235,35 @@ pub async fn delete_experiment(pool: &PgPool, environment_id: Uuid, key: &str) -
     Ok(())
 }
 
+/// Moves a running experiment's `started_at` into the past.
+///
+/// Demo seeding only: seeded counters span the preceding week, and results
+/// that predate their experiment's start would look like a data bug worth
+/// investigating rather than like a demo.
+pub async fn backdate_start(
+    pool: &PgPool,
+    environment_id: Uuid,
+    key: &str,
+    started_at: DateTime<Utc>,
+) -> Result<()> {
+    let updated = sqlx::query!(
+        r#"
+        UPDATE experiments SET started_at = $3
+        WHERE environment_id = $1 AND key = $2 AND state = 'running'
+        "#,
+        environment_id,
+        key,
+        started_at,
+    )
+    .execute(pool)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(StorageError::not_found("experiment"));
+    }
+    Ok(())
+}
+
 /// Experiment keys that reference `flag_id`, qualified by environment so the
 /// error message reading them locates each one. Used to refuse flag deletion.
 pub async fn experiments_referencing_flag(pool: &PgPool, flag_id: Uuid) -> Result<Vec<String>> {

@@ -3,6 +3,8 @@
 pub mod audit;
 pub mod auth;
 pub mod evaluate;
+pub mod events;
+pub mod experiments;
 pub mod flags;
 pub mod health;
 pub mod keys;
@@ -103,6 +105,26 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
             get(segments::get).put(segments::update).delete(segments::delete),
         )
         .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/experiments",
+            get(experiments::list).post(experiments::create),
+        )
+        .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/experiments/{experiment_key}",
+            get(experiments::get).patch(experiments::update).delete(experiments::delete),
+        )
+        .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/experiments/{experiment_key}/start",
+            post(experiments::start),
+        )
+        .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/experiments/{experiment_key}/stop",
+            post(experiments::stop),
+        )
+        .route(
+            "/api/v1/projects/{project_key}/environments/{environment_key}/experiments/{experiment_key}/results",
+            get(experiments::results),
+        )
+        .route(
             "/api/v1/projects/{project_key}/environments/{environment_key}/keys",
             get(keys::list).post(keys::create),
         )
@@ -119,6 +141,7 @@ pub fn router(state: AppState, metrics: PrometheusHandle) -> Router {
         .route("/api/v1/evaluate", post(evaluate::evaluate_all))
         .route("/api/v1/evaluate/{flag_key}", post(evaluate::evaluate_one))
         .route("/api/v1/snapshot", get(evaluate::snapshot))
+        .route("/api/v1/events", post(events::ingest))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
