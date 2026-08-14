@@ -457,6 +457,8 @@ fn ResultsPanel(
                     </div>
                 </Show>
 
+                {chart(&loaded.series, &position_of)}
+
                 <div class="table__scroll">
                     <table class="table">
                         <thead>
@@ -518,6 +520,219 @@ fn ResultsPanel(
             </div>
         </div>
     }
+}
+
+/// Chart geometry, in viewBox units. Width scales to the card; the aspect is
+/// fixed so stroke widths and markers keep their size.
+const CHART_W: f64 = 720.0;
+const CHART_H: f64 = 132.0;
+const PLOT_TOP: f64 = 10.0;
+const PLOT_BOTTOM: f64 = 118.0;
+
+/// The hourly conversion-rate lines, one per arm, colour-keyed like the
+/// meters below. Hours with no exposures break the line rather than plotting
+/// 0 % — no traffic is a gap, not a rate — and every marker carries its exact
+/// numbers, so the chart is the shape while the figures stay one hover away.
+fn chart(
+    series: &[crate::api::models::VariantSeries],
+    position_of: &impl Fn(&str) -> usize,
+) -> Option<AnyView> {
+    struct Dot {
+        x: f64,
+        y: f64,
+        title: String,
+    }
+    struct Line {
+        colour: usize,
+        variant: String,
+        segments: Vec<String>,
+        dots: Vec<Dot>,
+    }
+
+    /// One plottable hour: exposures were nonzero, so a rate exists.
+    struct Rated {
+        hour: chrono::DateTime<chrono::Utc>,
+        rate: f64,
+        conversions: u64,
+        exposures: u64,
+    }
+
+    let rated: Vec<(&str, Vec<Rated>)> = series
+        .iter()
+        .map(|s| {
+            let points = s
+                .points
+                .iter()
+                .filter(|p| p.exposures > 0)
+                .map(|p| Rated {
+                    hour: p.hour,
+                    rate: p.conversions.min(p.exposures) as f64 / p.exposures as f64,
+                    conversions: p.conversions,
+                    exposures: p.exposures,
+                })
+                .collect::<Vec<_>>();
+            (s.variant.as_str(), points)
+        })
+        .collect();
+
+    // A line needs two points somewhere; a single lonely hour is the table's
+    // job, not a chart's.
+    if rated.iter().map(|(_, p)| p.len()).sum::<usize>() < 2 {
+        return None;
+    }
+
+    let hours: Vec<i64> =
+        rated.iter().flat_map(|(_, p)| p.iter().map(|r| r.hour.timestamp())).collect();
+    let (min_t, max_t) =
+        (*hours.iter().min().expect("nonempty"), *hours.iter().max().expect("nonempty"));
+    let span = ((max_t - min_t) as f64).max(3600.0);
+
+    let top_rate = rated.iter().flat_map(|(_, p)| p.iter().map(|r| r.rate)).fold(0.0_f64, f64::max);
+    let y_scale = ((top_rate / 0.05).ceil() * 0.05).max(0.05);
+
+    let x_of = |t: i64| ((t - min_t) as f64 / span) * (CHART_W - 12.0) + 6.0;
+    let y_of = |rate: f64| PLOT_BOTTOM - (rate / y_scale) * (PLOT_BOTTOM - PLOT_TOP);
+
+    let lines: Vec<Line> = rated
+        .iter()
+        .filter(|(_, points)| !points.is_empty())
+        .map(|(variant, points)| {
+            let mut segments = Vec::new();
+            let mut current = String::new();
+            let mut dots = Vec::new();
+            let mut previous: Option<i64> = None;
+
+            for point in points {
+                let t = point.hour.timestamp();
+                let (x, y) = (x_of(t), y_of(point.rate));
+                // Contiguous hours extend the line; a gap starts a new one.
+                let joined = previous.is_some_and(|p| t - p == 3600);
+                if joined {
+                    current.push_str(&format!(" L{x:.1} {y:.1}"));
+                } else {
+                    if !current.is_empty() {
+                        segments.push(std::mem::take(&mut current));
+                    }
+                    current = format!("M{x:.1} {y:.1}");
+                }
+                previous = Some(t);
+                dots.push(Dot {
+                    x,
+                    y,
+                    title: format!(
+                        "{variant} · {}: {:.1} % ({}/{})",
+                        point.hour.format("%b %d %H:00"),
+                        point.rate * 100.0,
+                        point.conversions,
+                        point.exposures
+                    ),
+                });
+            }
+            if !current.is_empty() {
+                segments.push(current);
+            }
+            Line { colour: position_of(variant), variant: (*variant).to_owned(), segments, dots }
+        })
+        .collect();
+
+    let legend = lines
+        .iter()
+        .map(|line| {
+            view! {
+                <span class="row" style="gap:6px;align-items:center">
+                    <span
+                        class="dot"
+                        style=format!("color:var(--bar-{})", line.colour)
+                    ></span>
+                    <code class="cell-key">{line.variant.clone()}</code>
+                </span>
+            }
+        })
+        .collect_view();
+
+    Some(
+        view! {
+            <div class="stack" style="gap:var(--space-2)">
+                <div class="row" style="gap:var(--space-4);align-items:center">
+                    {legend}
+                    <div class="spacer"></div>
+                    <span class="cell-secondary">
+                        {format!(
+                            "Hourly conversion rate · trailing week · scale 0–{:.0} %",
+                            y_scale * 100.0
+                        )}
+                    </span>
+                </div>
+                <svg
+                    viewBox=format!("0 0 {CHART_W} {CHART_H}")
+                    style="width:100%;height:auto;display:block"
+                    role="img"
+                    aria-label="Hourly conversion rate per arm over the trailing week"
+                >
+                    {[0.0_f64, 0.5, 1.0]
+                        .into_iter()
+                        .map(|fraction| {
+                            let y = y_of(fraction * y_scale);
+                            view! {
+                                <line
+                                    x1="0"
+                                    x2=CHART_W
+                                    y1=y
+                                    y2=y
+                                    stroke="var(--border)"
+                                    stroke-width="1"
+                                ></line>
+                            }
+                        })
+                        .collect_view()}
+                    {lines
+                        .into_iter()
+                        .map(|line| {
+                            let stroke = format!("var(--bar-{})", line.colour);
+                            view! {
+                                {line
+                                    .segments
+                                    .into_iter()
+                                    .map(|d| {
+                                        view! {
+                                            <path
+                                                d=d
+                                                fill="none"
+                                                stroke=stroke.clone()
+                                                stroke-width="2"
+                                                stroke-linejoin="round"
+                                                stroke-linecap="round"
+                                            ></path>
+                                        }
+                                    })
+                                    .collect_view()}
+                                {line
+                                    .dots
+                                    .into_iter()
+                                    .map(|dot| {
+                                        // Invisible, and wider than the line:
+                                        // a hover target per hour without 168
+                                        // dots of ink per arm.
+                                        view! {
+                                            <circle
+                                                cx=dot.x
+                                                cy=dot.y
+                                                r="6"
+                                                fill="transparent"
+                                            >
+                                                <title>{dot.title}</title>
+                                            </circle>
+                                        }
+                                    })
+                                    .collect_view()}
+                            }
+                        })
+                        .collect_view()}
+                </svg>
+            </div>
+        }
+        .into_any(),
+    )
 }
 
 #[component]

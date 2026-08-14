@@ -278,9 +278,11 @@ pub async fn run(
 /// operator actually encounters, on the first screen they open.
 ///
 /// The counters are deterministic rather than random (seeding must be
-/// reproducible), with a small modular wobble so the hourly cells do not all
-/// carry the same number: the treatment converts at ~13%, the control at ~9%,
-/// enough for the z-test to reach a verdict on a week of data.
+/// reproducible), but shaped like traffic rather than like a formula: a daily
+/// cosine cycle peaking mid-afternoon, with a small hash-style jitter on both
+/// volume and rate so the results chart shows a plausible week, not a
+/// sawtooth. The treatment converts at ~13.5%, the control at ~9%, enough for
+/// the z-test to reach a verdict on a week of data.
 async fn seed_experiment(
     pool: &PgPool,
     organization_id: Uuid,
@@ -333,10 +335,18 @@ async fn seed_experiment(
         let mut deltas = Vec::new();
         for hour in 0..HOURS {
             let at = now - TimeDelta::hours(hour);
-            let exposures = 40 + (hour % 9) as u32;
-            for (variant, conversions) in
-                [("on", 5 + (hour % 3) as u32), ("off", 3 + (hour % 3) as u32)]
-            {
+            // Daily cycle: quiet around 02:00, peaking around 14:00.
+            let hour_of_day = ((24 + 14 - (hour % 24)) % 24) as f64;
+            let cycle = 1.0 + (hour_of_day * std::f64::consts::PI / 12.0).cos();
+            let exposures = (26.0 + 14.0 * cycle) as u32 + (hour * 37 % 7) as u32;
+
+            for (variant, rate) in [("on", 0.135), ("off", 0.091)] {
+                // ±1.6 points of deterministic jitter, uncorrelated between
+                // arms so the two lines do not move in lockstep.
+                let salt = if variant == "on" { 53 } else { 71 };
+                let jitter = ((hour * salt % 9) as f64 - 4.0) * 0.004;
+                let conversions = (f64::from(exposures) * (rate + jitter)).round() as u32;
+
                 deltas.push(CounterDelta {
                     experiment_key: EXPERIMENT_KEY.to_owned(),
                     variant: variant.to_owned(),

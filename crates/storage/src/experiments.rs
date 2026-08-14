@@ -8,7 +8,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{FoundExt, Result, StorageError};
-use crate::models::{CounterDelta, CounterKind, Experiment, ExperimentState};
+use crate::models::{
+    CounterDelta, CounterKind, Experiment, ExperimentState, SeriesPoint, VariantSeries,
+};
 
 /// The columns every experiment read selects: the row itself plus the flag's
 /// key and variants, which every consumer needs (see [`Experiment`]).
@@ -383,6 +385,49 @@ pub async fn experiment_counts(pool: &PgPool, experiment_id: Uuid) -> Result<Vec
         }
     }
     Ok(by_variant)
+}
+
+/// Hourly tallies per variant since `since`, oldest hour first.
+///
+/// This is the read the pre-aggregated schema was shaped for: the window is a
+/// range scan of the primary key, and its size is bounded by hours elapsed
+/// times variants — the same number whether the experiment saw ten requests
+/// or ten million.
+pub async fn hourly_counts(
+    pool: &PgPool,
+    experiment_id: Uuid,
+    since: DateTime<Utc>,
+) -> Result<Vec<VariantSeries>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT variant, kind, hour, count
+        FROM experiment_counters
+        WHERE experiment_id = $1 AND hour >= $2
+        ORDER BY variant, hour
+        "#,
+        experiment_id,
+        since,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut series: Vec<VariantSeries> = Vec::new();
+    for row in rows {
+        if series.last().is_none_or(|s| s.variant != row.variant) {
+            series.push(VariantSeries { variant: row.variant.clone(), points: Vec::new() });
+        }
+        let points = &mut series.last_mut().expect("just ensured").points;
+        if points.last().is_none_or(|p| p.hour != row.hour) {
+            points.push(SeriesPoint { hour: row.hour, exposures: 0, conversions: 0 });
+        }
+        let point = points.last_mut().expect("just ensured");
+        let count = u64::try_from(row.count).unwrap_or(0);
+        match row.kind.as_str() {
+            "exposure" => point.exposures += count,
+            _ => point.conversions += count,
+        }
+    }
+    Ok(series)
 }
 
 /// The running experiments of one environment, for snapshot loading.

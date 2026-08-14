@@ -229,6 +229,64 @@ async fn duplicate_cells_in_one_batch_are_summed_not_a_server_error(pool: PgPool
 }
 
 #[sqlx::test(migrations = "../../migrations")]
+async fn the_results_series_buckets_by_hour_and_windows_a_week(pool: PgPool) {
+    let app = TestApp::new(pool);
+    let tenant = app.bootstrap("Acme", "ada@acme.test").await;
+    app.create_flag(&tenant.token, "checkout.v2").await;
+
+    app.post(EXPERIMENTS, Some(&tenant.token), checkout_experiment())
+        .await
+        .expect(StatusCode::CREATED);
+    app.post(&format!("{EXPERIMENTS}/checkout-cta/start"), Some(&tenant.token), json!({}))
+        .await
+        .expect(StatusCode::OK);
+
+    // Two events inside one hour, one in the next, and one far outside the
+    // window — the first two must merge, the last must not appear at all.
+    let now = chrono::Utc::now();
+    let hour_a = now - chrono::TimeDelta::hours(2);
+    let hour_a_later = hour_a + chrono::TimeDelta::minutes(20);
+    let hour_b = now - chrono::TimeDelta::hours(1);
+    let ancient = now - chrono::TimeDelta::days(30);
+    let events = json!({
+        "events": [
+            {"experiment_key": "checkout-cta", "variant": "on", "kind": "exposure",
+             "count": 3, "at": hour_a},
+            {"experiment_key": "checkout-cta", "variant": "on", "kind": "exposure",
+             "count": 2, "at": hour_a_later},
+            {"experiment_key": "checkout-cta", "variant": "on", "kind": "conversion",
+             "count": 1, "at": hour_b},
+            {"experiment_key": "checkout-cta", "variant": "on", "kind": "exposure",
+             "count": 99, "at": ancient},
+        ]
+    });
+    app.post("/api/v1/events", Some(&tenant.sdk_key), events).await.expect(StatusCode::ACCEPTED);
+
+    let body = app
+        .get(&format!("{EXPERIMENTS}/checkout-cta/results"), Some(&tenant.token))
+        .await
+        .expect(StatusCode::OK);
+
+    let series = body["series"].as_array().expect("series array");
+    assert_eq!(series.len(), 1, "only arms with points in the window appear: {body}");
+    assert_eq!(series[0]["variant"], "on");
+
+    let points = series[0]["points"].as_array().expect("points");
+    assert_eq!(points.len(), 2, "two hours touched inside the window: {body}");
+    assert_eq!(points[0]["exposures"], 5, "same-hour events must merge into one point");
+    assert_eq!(points[0]["conversions"], 0);
+    assert_eq!(points[1]["conversions"], 1);
+    // Oldest first, and truncated to the hour.
+    let first = points[0]["hour"].as_str().unwrap();
+    let second = points[1]["hour"].as_str().unwrap();
+    assert!(first < second, "points must come oldest first: {first} vs {second}");
+    assert!(first.contains(":00:00"), "hours must be truncated: {first}");
+
+    // The totals still count everything, window or not.
+    assert_eq!(body["results"][0]["exposures"], 104, "{body}");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
 async fn events_require_an_sdk_key(pool: PgPool) {
     let app = TestApp::new(pool);
     let tenant = app.bootstrap("Acme", "ada@acme.test").await;
