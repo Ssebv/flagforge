@@ -284,8 +284,11 @@ An experiment binds a flag to a conversion metric; the flag's variants become
 the arms and the traffic you already serve becomes the sample. Each arm gets a
 rate, a 95 % Wilson interval drawn on a shared scale, and a two-proportion
 z-test against the control — in words, with the exact numbers printed beside
-every bar. The lifecycle is one-way (draft → running → stopped) because a
-reopened measurement window would average two populations into an answer about
+every bar. Above the table, the trailing week as hourly conversion-rate lines,
+read straight off the pre-aggregated cells: hours with no traffic break the
+line rather than plotting 0 %, because those are different facts. The
+lifecycle is one-way (draft → running → stopped) because a reopened
+measurement window would average two populations into an answer about
 neither, and a stopped experiment's results stay exactly as they ended.
 
 ### The rest of it

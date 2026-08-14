@@ -107,6 +107,8 @@ use crate::routes::{
         flagforge_storage::models::Experiment,
         flagforge_storage::models::ExperimentState,
         flagforge_storage::models::CounterKind,
+        flagforge_storage::models::VariantSeries,
+        flagforge_storage::models::SeriesPoint,
         flagforge_core::ExperimentSpec,
         flagforge_core::VariantCounts,
         flagforge_core::VariantResult,

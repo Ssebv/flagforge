@@ -268,6 +268,22 @@ impl CounterKind {
     }
 }
 
+/// One hour of one variant's tallies, for the results time series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SeriesPoint {
+    pub hour: DateTime<Utc>,
+    pub exposures: u64,
+    pub conversions: u64,
+}
+
+/// One variant's hourly history. Hours nobody recorded are simply absent —
+/// the consumer decides whether a gap is a zero or a break in the line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct VariantSeries {
+    pub variant: String,
+    pub points: Vec<SeriesPoint>,
+}
+
 /// One increment on its way into `experiment_counters`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CounterDelta {

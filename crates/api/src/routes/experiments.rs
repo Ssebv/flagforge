@@ -44,6 +44,11 @@ pub struct UpdateExperiment {
     pub description: Option<Option<String>>,
 }
 
+/// How far back the results time series reaches. A week of hourly points is
+/// 168 per arm — small on the wire — and the totals above the series already
+/// cover all time, so a longer window would add bytes, not information.
+const SERIES_WINDOW: chrono::TimeDelta = chrono::TimeDelta::days(7);
+
 /// An experiment next to its judged results, one entry per variant.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ExperimentResults {
@@ -53,6 +58,10 @@ pub struct ExperimentResults {
     /// appears in the counters but not on the flag — possible after a variant
     /// rename — is appended rather than hidden.
     pub results: Vec<flagforge_core::VariantResult>,
+    /// Hourly tallies over the trailing week, same variant order as `results`.
+    /// Hours nobody recorded are absent, not zero: the difference between "no
+    /// traffic" and "0 % converting" matters to a chart.
+    pub series: Vec<flagforge_storage::models::VariantSeries>,
 }
 
 #[utoipa::path(
@@ -391,11 +400,35 @@ pub async fn results(
     let experiment =
         experiments::find_experiment(&state.pool, environment.id, &experiment_key).await?;
     let counts = experiments::experiment_counts(&state.pool, experiment.id).await?;
+    let since = chrono::Utc::now() - SERIES_WINDOW;
+    let series = experiments::hourly_counts(&state.pool, experiment.id, since).await?;
 
     let judged =
         flagforge_core::results(&experiment.control_variant, &in_flag_order(&experiment, counts));
 
-    Ok(Json(ExperimentResults { experiment, results: judged }))
+    Ok(Json(ExperimentResults {
+        results: judged,
+        series: series_in_flag_order(&experiment, series),
+        experiment,
+    }))
+}
+
+/// The series counterpart of [`in_flag_order`]: flag-variant order first,
+/// extras appended. Arms without any point in the window are absent rather
+/// than zero-filled — the chart treats no traffic as a gap, not as 0 %.
+fn series_in_flag_order(
+    experiment: &Experiment,
+    mut series: Vec<flagforge_storage::models::VariantSeries>,
+) -> Vec<flagforge_storage::models::VariantSeries> {
+    let mut ordered = Vec::with_capacity(series.len());
+    for variant in &experiment.variants {
+        if let Some(index) = series.iter().position(|s| s.variant == variant.key) {
+            ordered.push(series.swap_remove(index));
+        }
+    }
+    series.sort_by(|a, b| a.variant.cmp(&b.variant));
+    ordered.extend(series);
+    ordered
 }
 
 /// Orders counts by the flag's variant list, zero-filling arms that have no

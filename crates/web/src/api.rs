@@ -226,11 +226,29 @@ pub mod models {
         pub version: i64,
     }
 
+    /// One hour of one variant's tallies.
+    #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+    pub struct SeriesPoint {
+        pub hour: chrono::DateTime<chrono::Utc>,
+        pub exposures: u64,
+        pub conversions: u64,
+    }
+
+    /// One variant's hourly history over the server's window. Absent hours are
+    /// gaps — no traffic — which the chart renders as breaks, not zeroes.
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct VariantSeries {
+        pub variant: String,
+        pub points: Vec<SeriesPoint>,
+    }
+
     /// An experiment next to its judged results.
     #[derive(Debug, Clone, PartialEq, Deserialize)]
     pub struct ExperimentResults {
         pub experiment: Experiment,
         pub results: Vec<flagforge_core::VariantResult>,
+        #[serde(default)]
+        pub series: Vec<VariantSeries>,
     }
 
     #[derive(Debug, Clone, PartialEq, Deserialize)]
