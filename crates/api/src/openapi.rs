@@ -102,6 +102,7 @@ use crate::routes::{
         flagforge_storage::models::Flag,
         flagforge_storage::models::FlagConfig,
         flagforge_storage::flags::ConfiguredFlag,
+        crate::routes::flags::FlagWithUsage,
         flagforge_storage::models::Segment,
         crate::routes::segments::SegmentWithUsage,
         flagforge_storage::models::Experiment,

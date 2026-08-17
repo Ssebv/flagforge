@@ -149,6 +149,11 @@ pub mod models {
         pub variants: Vec<Variant>,
         pub archived: bool,
         pub updated_at: String,
+        /// Experiments measuring this flag, as `environment/key`. Only the
+        /// single-flag endpoint sends it; defaulted so list responses — which
+        /// omit it — still deserialize.
+        #[serde(default)]
+        pub measured_by: Vec<String>,
     }
 
     #[derive(Debug, Clone, PartialEq, Deserialize)]
