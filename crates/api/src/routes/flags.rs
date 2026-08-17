@@ -6,8 +6,8 @@ use axum::http::StatusCode;
 use flagforge_core::{Distribution, Rule, Variant};
 use flagforge_storage::flags::ConfiguredFlag;
 use flagforge_storage::models::{Flag, FlagConfig, NewAuditEntry};
-use flagforge_storage::{audit, flags, projects, segments};
-use serde::Deserialize;
+use flagforge_storage::{audit, experiments, flags, projects, segments};
+use serde::{Deserialize, Serialize};
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
@@ -111,6 +111,20 @@ pub async fn list(
     Ok(Json(flags::list_flags(&state.pool, project.id, query.include_archived).await?))
 }
 
+/// A flag together with the experiments measuring it — the same shape
+/// [`crate::routes::segments::SegmentWithUsage`] gives a segment, and for the
+/// same reason: the blast radius of an edit should be visible on the screen
+/// where the edit happens, not discovered in a refusal afterwards.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct FlagWithUsage {
+    #[serde(flatten)]
+    pub flag: Flag,
+    /// Experiments whose arms are this flag's variants, as `environment/key`,
+    /// in any lifecycle state — a draft or stopped experiment still pins the
+    /// flag against deletion, and its counters still name these variants.
+    pub measured_by: Vec<String>,
+}
+
 #[utoipa::path(
     get, path = "/api/v1/projects/{project_key}/flags/{flag_key}", tag = "flags",
     security(("bearer" = [])),
@@ -119,7 +133,7 @@ pub async fn list(
         ("flag_key" = String, Path, description = "Flag key"),
     ),
     responses(
-        (status = 200, description = "The flag definition", body = Flag),
+        (status = 200, description = "The flag definition and what measures it", body = FlagWithUsage),
         (status = 404, description = "No such flag"),
     )
 )]
@@ -127,9 +141,11 @@ pub async fn get(
     State(state): State<AppState>,
     caller: AuthUser,
     Path((project_key, flag_key)): Path<(String, String)>,
-) -> ApiResult<Json<Flag>> {
+) -> ApiResult<Json<FlagWithUsage>> {
     let project = projects::find_project(&state.pool, caller.organization_id, &project_key).await?;
-    Ok(Json(flags::find_flag(&state.pool, project.id, &flag_key).await?))
+    let flag = flags::find_flag(&state.pool, project.id, &flag_key).await?;
+    let measured_by = experiments::experiments_referencing_flag(&state.pool, flag.id).await?;
+    Ok(Json(FlagWithUsage { flag, measured_by }))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

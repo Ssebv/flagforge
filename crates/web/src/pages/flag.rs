@@ -52,6 +52,9 @@ pub fn FlagDetail() -> impl IntoView {
     let environments = RwSignal::new(Load::<Vec<Environment>>::Loading);
     let selected = RwSignal::new(Option::<String>::None);
     let variants = RwSignal::new(Vec::<Variant>::new());
+    // Experiments measuring this flag, as `environment/key`. Shown before an
+    // edit rather than discovered in a refusal after one.
+    let measured_by = RwSignal::new(Vec::<String>::new());
     // The environment's audiences. Needed to resolve a rule's segment
     // reference — without them the preview would report every gated rule as
     // matching nobody while production said otherwise.
@@ -113,6 +116,7 @@ pub fn FlagDetail() -> impl IntoView {
             match (definition, config) {
                 (Ok(definition), Ok(config)) => {
                     variants.set(definition.variants);
+                    measured_by.set(definition.measured_by);
                     let value = Draft {
                         enabled: config.enabled,
                         off_variant: config.off_variant,
@@ -273,6 +277,19 @@ pub fn FlagDetail() -> impl IntoView {
                 (Load::Ready(_), Some(_)) => {
                     view! {
                         <>
+                            <Show when=move || !measured_by.get().is_empty()>
+                                <div class="callout callout--accent">
+                                    <div style="width:16px;height:16px;flex:none">
+                                        <Icon name="flask" />
+                                    </div>
+                                    <span>
+                                        "Measured by "
+                                        <strong>{move || measured_by.get().join(", ")}</strong>
+                                        ". Its variants are the experiment's arms — renaming one mid-run orphans its counters, and the flag cannot be deleted while an experiment references it."
+                                    </span>
+                                </div>
+                            </Show>
+
                             <Show when=move || !issues.get().is_empty()>
                                 <IssueList issues=Signal::derive(move || issues.get()) />
                             </Show>
@@ -303,6 +320,7 @@ pub fn FlagDetail() -> impl IntoView {
                                 <DangerZone
                                     project=Signal::derive(project_key)
                                     flag_key=Signal::derive(flag_key)
+                                    measured_by=Signal::derive(move || measured_by.get())
                                 />
                             </Show>
                         </>
@@ -1407,7 +1425,11 @@ fn Preview(
 /// stops a flag being served but keeps its history, while deleting removes it
 /// from every environment at once and cannot be undone.
 #[component]
-fn DangerZone(project: Signal<String>, flag_key: Signal<String>) -> impl IntoView {
+fn DangerZone(
+    project: Signal<String>,
+    flag_key: Signal<String>,
+    measured_by: Signal<Vec<String>>,
+) -> impl IntoView {
     let session = use_session();
     let toaster = use_toaster();
     let navigate = leptos_router::hooks::use_navigate();
@@ -1453,6 +1475,9 @@ fn DangerZone(project: Signal<String>, flag_key: Signal<String>) -> impl IntoVie
         });
     };
 
+    // Built once, outside the Show: callbacks are Copy, closures are not.
+    let delete_confirmed = Callback::new(delete);
+
     view! {
         <div class="card">
             <div class="card__header">
@@ -1482,11 +1507,22 @@ fn DangerZone(project: Signal<String>, flag_key: Signal<String>) -> impl IntoVie
                             "Removes it from every environment immediately. SDKs fall back to their own defaults."
                         </span>
                     </div>
-                    <ConfirmButton
-                        label="Delete"
-                        confirm_label="Delete permanently"
-                        on_confirm=Callback::new(delete)
-                    />
+                    <Show
+                        when=move || measured_by.get().is_empty()
+                        fallback=|| {
+                            view! {
+                                <span class="cell-secondary">
+                                    "Measured by an experiment, so it cannot be deleted yet."
+                                </span>
+                            }
+                        }
+                    >
+                        <ConfirmButton
+                            label="Delete"
+                            confirm_label="Delete permanently"
+                            on_confirm=delete_confirmed
+                        />
+                    </Show>
                 </div>
             </div>
         </div>

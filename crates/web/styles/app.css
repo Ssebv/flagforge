@@ -685,9 +685,12 @@ code {
   background-size: 15px;
 }
 
+/* Muted rather than subtle: hints appear on sunken surfaces too (the
+ * preview panel, card footers), where subtle's 4.37:1 misses AA at this
+ * size. The hierarchy step below body text survives in the font size. */
 .hint {
   font-size: 12px;
-  color: var(--text-subtle);
+  color: var(--text-muted);
 }
 
 .field-error {

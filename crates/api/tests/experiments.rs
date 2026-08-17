@@ -155,6 +155,14 @@ async fn an_experiment_pins_its_flag_against_deletion(pool: PgPool) {
         .await
         .expect(StatusCode::CREATED);
 
+    // The pin is visible on the flag itself before any refusal: the dashboard
+    // shows the blast radius on the screen where the edit happens.
+    let flag = app
+        .get("/api/v1/projects/checkout/flags/checkout.v2", Some(&tenant.token))
+        .await
+        .expect(StatusCode::OK);
+    assert_eq!(flag["measured_by"], json!(["production/checkout-cta"]), "{flag}");
+
     let refused =
         app.delete("/api/v1/projects/checkout/flags/checkout.v2", Some(&tenant.token)).await;
     let problem = refused.expect(StatusCode::CONFLICT);
@@ -167,6 +175,11 @@ async fn an_experiment_pins_its_flag_against_deletion(pool: PgPool) {
     app.delete(&format!("{EXPERIMENTS}/checkout-cta"), Some(&tenant.token))
         .await
         .expect(StatusCode::NO_CONTENT);
+    let flag = app
+        .get("/api/v1/projects/checkout/flags/checkout.v2", Some(&tenant.token))
+        .await
+        .expect(StatusCode::OK);
+    assert_eq!(flag["measured_by"], json!([]), "{flag}");
     app.delete("/api/v1/projects/checkout/flags/checkout.v2", Some(&tenant.token))
         .await
         .expect(StatusCode::NO_CONTENT);
