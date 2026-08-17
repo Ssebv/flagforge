@@ -97,10 +97,14 @@ jobs:
         with:
           workspaces: crates/web
 
+      # Pinned, not `latest`: the resolver once handed one run trunk 0.19
+      # (whose wasm-opt predates the bulk-memory ops rustc now emits) and the
+      # next run 0.21, so the same commit failed and passed an hour apart.
+      # Matches the version developed against locally.
       - name: Install Trunk
         uses: jetli/trunk-action@v0.5.0
         with:
-          version: latest
+          version: v0.21.14
 
       - name: Check formatting
         working-directory: crates/web
