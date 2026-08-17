@@ -634,7 +634,7 @@ async fn internal_errors_never_leak_their_cause() {
 cargo test --workspace        # needs DATABASE_URL for the integration suite
 ```
 
-**244 tests**, in four layers — plus a CI job that runs the quick start above
+**245 tests**, in four layers — plus a CI job that runs the quick start above
 and checks what it promises, because it was once broken while every other
 check stayed green:
 
@@ -649,7 +649,7 @@ check stayed green:
   OpenAPI generation (including a check that the domain and storage `Flag` and
   `Segment` types do not collide into one schema — utoipa keys schemas by type
   name).
-- **Integration (64).** `#[sqlx::test]` gives each test its own freshly
+- **Integration (65).** `#[sqlx::test]` gives each test its own freshly
   migrated database, and the suite drives the *real* router — middleware,
   extractors and all — via `tower::ServiceExt::oneshot`. Includes the ones a
   public deployment rests on: that the seed is a no-op the second time, and
