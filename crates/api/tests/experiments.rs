@@ -243,10 +243,17 @@ async fn the_results_series_buckets_by_hour_and_windows_a_week(pool: PgPool) {
 
     // Two events inside one hour, one in the next, and one far outside the
     // window — the first two must merge, the last must not appear at all.
+    //
+    // Anchored to a *truncated* hour, not to `now` minus two hours: the naive
+    // version put `hour_a + 20min` in a different bucket whenever the test ran
+    // past minute 40, which is a 33 % failure window that CI eventually hit.
+    use chrono::DurationRound;
     let now = chrono::Utc::now();
-    let hour_a = now - chrono::TimeDelta::hours(2);
+    let hour_a = (now - chrono::TimeDelta::hours(2))
+        .duration_trunc(chrono::TimeDelta::hours(1))
+        .expect("hour truncation");
     let hour_a_later = hour_a + chrono::TimeDelta::minutes(20);
-    let hour_b = now - chrono::TimeDelta::hours(1);
+    let hour_b = hour_a + chrono::TimeDelta::hours(1);
     let ancient = now - chrono::TimeDelta::days(30);
     let events = json!({
         "events": [
