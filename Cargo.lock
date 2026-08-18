@@ -774,7 +774,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flagforge-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "flagforge-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "proptest",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "flagforge-sdk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "flagforge-storage"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "flagforge-core",
