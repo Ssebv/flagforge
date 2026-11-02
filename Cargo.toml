@@ -8,7 +8,7 @@ exclude = ["crates/web"]
 [workspace.package]
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/Ssebv/flagforge"
 authors = ["FlagForge contributors"]
@@ -70,8 +70,8 @@ base64 = "0.23"
 rand = "0.10"
 
 # Docs
-utoipa = { version = "5.5", features = ["axum_extras", "uuid", "chrono"] }
-utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+utoipa = { version = "6.0", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "10.0", features = ["axum"] }
 
 # Misc
 rust-embed = "8.12"

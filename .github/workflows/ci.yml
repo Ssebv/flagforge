@@ -138,6 +138,9 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # RUSTSEC-2026-0387: crypto-bigint 0.5 comes through p256 and p384 in jsonwebtoken,
+          # whose latest release still requires them. Tokens are HS256 only, so that code never runs.
+          ignore: RUSTSEC-2026-0387
 
   compose:
     name: Quick start
