@@ -197,7 +197,7 @@ impl Fixture {
 
 fn context(index: u32) -> EvaluationContext {
     EvaluationContext::new(format!("user-{index}"))
-        .with("plan", if index % 10 == 0 { "enterprise" } else { "free" })
+        .with("plan", if index.is_multiple_of(10) { "enterprise" } else { "free" })
 }
 
 #[sqlx::test(migrations = "../../migrations")]
