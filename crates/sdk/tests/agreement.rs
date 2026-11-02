@@ -357,7 +357,7 @@ async fn recorded_counters_agree_with_local_assignment(pool: PgPool) {
         *exposures.entry(variant.clone()).or_default() += 1;
 
         // Every third user converts.
-        if i % 3 == 0 {
+        if i.is_multiple_of(3) {
             assert_eq!(client.track("order.completed", &context), 1);
             *conversions.entry(variant).or_default() += 1;
         }
