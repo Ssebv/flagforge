@@ -1,7 +1,7 @@
 # FlagForge
 
 **A multi-tenant feature-flag service in Rust.** Targeted rollouts, deterministic
-bucketing, and an audit trail — with evaluation served from memory in **74 ns**
+bucketing, and an audit trail — with evaluation served from memory in **under a microsecond**
 ([measured](#how-fast-is-evaluation)), and a dashboard compiled to WebAssembly
 from the same codebase.
 
@@ -273,7 +273,7 @@ WASM. The editor is not approximating what the server would do — it is calling
 - **The simulation is exact.** It evaluates 2 000 synthetic subjects to show
   the real split. Aggregate distribution does not depend on the bucketing salt,
   so those percentages are what production will do. Which side one *specific*
-  user lands on does depend on the salt, and the salt never leaves the server —
+  user lands on does depend on the salt, and the salt never reaches the dashboard —
   so the UI says that rather than pretending otherwise.
 
 ### Experiments end in a verdict
