@@ -7,7 +7,7 @@ from the same codebase.
 
 [![CI](https://github.com/Ssebv/flagforge/actions/workflows/ci.yml/badge.svg)](https://github.com/Ssebv/flagforge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
+![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
 ![No JavaScript build](https://img.shields.io/badge/frontend-Leptos%20%2F%20WASM-orange.svg)
 
 **Run it in two commands** — `docker compose up --build`, then
